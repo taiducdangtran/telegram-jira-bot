@@ -94,18 +94,34 @@ chmod +x scripts/*.sh
 Trong Telegram, chat với bot của bạn:
 
 ```
-/start                      → hướng dẫn
-/projects                   → liệt kê project Jira
-/useproject KAN             → chọn project để ghi việc
-mai 3h chiều gọi khách A    → tạo issue + tự nhắc 15:00 ngày mai
-thứ 6 nộp báo cáo tuần      → tạo issue + nhắc 09:00 thứ 6
-/note Thanh toán hoá đơn    → ghi nhanh, không hạn
+/start                          → hướng dẫn
+/projects                       → liệt kê project Jira
+/useproject KAN                 → chọn project để ghi việc
+
+# Ghi việc (một lần)
+mai 3h chiều gọi khách A        → tạo issue + tự nhắc 15:00 ngày mai
+thứ 6 nộp báo cáo gấp #sales     → issue priority High + nhãn "sales"
+/note Thanh toán hoá đơn        → ghi nhanh, không hạn
 /note Họp team // 12/06 09:30   → ghi kèm hạn chính xác (không cần AI)
-/list                       → xem các việc đang chờ nhắc
+/list                           → việc một-lần đang chờ nhắc
+
+# Nhắc lặp 🔁 (ping lặp lại, KHÔNG tạo issue mỗi lần)
+/daily 08:00 Uống vitamin       → nhắc mỗi ngày 08:00
+/weekly t2 09:00 Họp đầu tuần   → nhắc mỗi thứ Hai 09:00
+mỗi ngày 8h uống thuốc          → tương đương /daily (câu tự nhiên)
+/recurring                      → xem các nhắc lặp + id để gỡ
+/stoprecur <id>                 → gỡ một nhắc lặp
+
+# Hoàn thành ✅
+/done KAN-12                    → chuyển issue sang Done
+(reply tin có mã việc) /done    → hoặc nhắn "xong" khi reply
 ```
 
+**Priority & nhãn:** từ khoá "gấp/khẩn/ưu tiên cao" → priority (High/Highest), "không gấp/ưu tiên
+thấp" → Low; `#tag` bất kỳ → Jira label. Project không hỗ trợ field nào thì bot tự bỏ qua field đó.
+
 Khi tới giờ, bot gửi tin nhắc kèm nút: **✅ Hoàn thành** (chuyển issue sang Done) ·
-**⏰ +1h** · **🌅 Sáng mai**.
+**⏰ +1h** · **🌅 Sáng mai**. Nhắc lặp có nút **✖ Dừng lặp**.
 
 ---
 

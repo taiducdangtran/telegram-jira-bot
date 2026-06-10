@@ -136,3 +136,51 @@ export function parseDueStrict(input: string, min: number, now: Date): string | 
   }
   return isoFromMs(ms, min);
 }
+
+// ---- Hỗ trợ nhắc lặp (recurring) ----
+
+// "HH:MM" theo giờ VN từ một ISO.
+export function hhmmVN(iso: string, min: number): string | null {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  const d = new Date(ms + min * 60000);
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+// Lần xảy ra kế tiếp của mốc "HH:MM" hằng ngày (giờ VN), luôn ở tương lai.
+export function nextDailyISO(time: string, env: any): string {
+  const [h, mi] = time.split(":").map(Number);
+  const min = offsetMin(env);
+  const n = nowVN(env);
+  let ms = msFromVN(n.getUTCFullYear(), n.getUTCMonth() + 1, n.getUTCDate(), h, mi, min);
+  if (ms <= Date.now()) ms += 86400000;
+  return isoFromMs(ms, min);
+}
+
+// Lần xảy ra kế tiếp của (thứ trong tuần, HH:MM) theo giờ VN, luôn ở tương lai.
+export function nextWeeklyISO(dow: number, time: string, env: any): string {
+  const [h, mi] = time.split(":").map(Number);
+  const min = offsetMin(env);
+  const n = nowVN(env);
+  for (let i = 0; i < 8; i++) {
+    const ms = msFromVN(n.getUTCFullYear(), n.getUTCMonth() + 1, n.getUTCDate() + i, h, mi, min);
+    const d = new Date(ms + min * 60000);
+    if (d.getUTCDay() === dow && ms > Date.now()) return isoFromMs(ms, min);
+  }
+  return isoFromMs(msFromVN(n.getUTCFullYear(), n.getUTCMonth() + 1, n.getUTCDate() + 7, h, mi, min), min);
+}
+
+// "t2".."t7", "cn", hoặc số 2..8 -> 0(CN)..6(T7). null nếu không hiểu.
+export function parseDow(token: string): number | null {
+  const t = token.trim().toLowerCase().replace(/[.\s]/g, "");
+  const map: Record<string, number> = {
+    cn: 0, chunhat: 0, t2: 1, t3: 2, t4: 3, t5: 4, t6: 5, t7: 6,
+    thu2: 1, thu3: 2, thu4: 3, thu5: 4, thu6: 5, thu7: 6,
+    "2": 1, "3": 2, "4": 3, "5": 4, "6": 5, "7": 6, "8": 0,
+  };
+  return t in map ? map[t] : null;
+}
+
+export function dowNameVN(d: number): string {
+  return DOW[((d % 7) + 7) % 7];
+}

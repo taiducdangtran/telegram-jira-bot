@@ -2,7 +2,7 @@
 //  - fetch:     nhận webhook Telegram (POST /webhook), trả 200 ngay, xử lý nền.
 //  - scheduled: Cron Trigger quét KV và bắn nhắc lịch.
 
-import { onUpdate, runReminders } from "./handlers";
+import { onUpdate, runReminders, runRecurring } from "./handlers";
 
 // So sánh constant-time để không rò rỉ secret qua thời gian phản hồi.
 function timingSafeEqual(a: string, b: string): boolean {
@@ -44,6 +44,11 @@ export default {
   },
 
   async scheduled(_event: ScheduledController, env: any, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(runReminders(env).catch((e) => console.error("scheduled", e)));
+    ctx.waitUntil(
+      Promise.all([
+        runReminders(env).catch((e) => console.error("reminders", e)),
+        runRecurring(env).catch((e) => console.error("recurring", e)),
+      ]),
+    );
   },
 };

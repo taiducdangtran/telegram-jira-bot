@@ -61,3 +61,8 @@ export function taskButtons(issueKey: string) {
     ],
   };
 }
+
+// Nút dưới mỗi nhắc lặp: dừng hẳn chuỗi lặp đó.
+export function recurButtons(id: string) {
+  return { inline_keyboard: [[{ text: "✖ Dừng lặp", callback_data: `rstop:${id}` }]] };
+}

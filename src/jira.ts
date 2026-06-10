@@ -60,14 +60,22 @@ function adf(text: string) {
 }
 
 export const jira = {
-  async createIssue(env: any, projectKey: string, summary: string, dueDateYMD: string | null, issueType?: string): Promise<any> {
+  async createIssue(
+    env: any,
+    projectKey: string,
+    summary: string,
+    dueDateYMD: string | null,
+    extra: { priority?: string | null; labels?: string[]; issueType?: string } = {},
+  ): Promise<any> {
     const fields: any = {
       project: { key: projectKey },
       summary,
-      issuetype: { name: issueType || env.JIRA_ISSUE_TYPE || "Task" },
+      issuetype: { name: extra.issueType || env.JIRA_ISSUE_TYPE || "Task" },
       description: adf("Tạo từ Telegram bot."),
     };
     if (dueDateYMD) fields.duedate = dueDateYMD; // Jira duedate chỉ nhận YYYY-MM-DD
+    if (extra.priority) fields.priority = { name: extra.priority };
+    if (extra.labels && extra.labels.length) fields.labels = extra.labels;
     return jreq(env, "POST", "/rest/api/3/issue", { fields }); // -> { id, key, self }
   },
 
