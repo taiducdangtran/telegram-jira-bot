@@ -142,6 +142,10 @@ export const jira = {
     return jreq(env, "PUT", `/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`, { accountId });
   },
 
+  async deleteIssue(env: any, issueKey: string): Promise<any> {
+    return jreq(env, "DELETE", `/rest/api/3/issue/${encodeURIComponent(issueKey)}`);
+  },
+
   issueUrl(env: any, issueKey: string): string {
     return `${base(env)}/browse/${encodeURIComponent(issueKey)}`;
   },

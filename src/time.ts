@@ -188,13 +188,13 @@ export function dowNameVN(d: number): string {
 // "3 phút nữa", "2 tiếng nữa", "1 ngày sau" -> mốc tương lai + text đã gỡ cụm thời gian.
 // Trả null nếu không khớp.
 export function parseRelative(text: string, env: any): { dueISO: string; text: string } | null {
-  const m = text.match(/(\d+)\s*(phút|phut|tiếng|tieng|giờ|gio|tiến|ngày|ngay|h)\s*(nữa|nua|sau|tới|toi)/i);
+  const m = text.match(/(\d+)\s*(phút|phut|p|tiếng|tieng|giờ|gio|g|h|ngày|ngay)\s*(nữa|nua|sau|tới|toi)/i);
   if (!m) return null;
   const n = parseInt(m[1], 10);
   if (!Number.isFinite(n) || n <= 0) return null;
   const u = m[2].toLowerCase();
-  const isMin = ["phút", "phut"].includes(u);
-  const isHour = ["tiếng", "tieng", "giờ", "gio", "tiến", "h"].includes(u);
+  const isMin = ["phút", "phut", "p"].includes(u);
+  const isHour = ["tiếng", "tieng", "giờ", "gio", "g", "h"].includes(u);
   const ms = Date.now() + (isMin ? n * 60000 : isHour ? n * 3600000 : n * 86400000);
   const cleaned = text.replace(m[0], " ").replace(/\s+/g, " ").trim();
   return { dueISO: isoFromMs(ms, offsetMin(env)), text: cleaned };

@@ -28,14 +28,16 @@ const HELP = `🤖 <b>Bot quản lý việc → Jira</b>
 • /daily HH:MM &lt;việc&gt; · /weekly &lt;t2..t7|cn&gt; HH:MM &lt;việc&gt; · "mỗi ngày 8h ..."
 • /recurring — xem · /stoprecur &lt;id&gt; — gỡ.
 
-<b>Hoàn thành ✅</b>
-• Bấm nút ✅, hoặc /done KAN-12, hoặc <b>reply</b> tin có mã việc rồi gõ <code>/done</code> (hay "xong").
+<b>Hoàn thành ✅ / Xoá 🗑️</b>
+• Xong: nút ✅, hoặc /done KAN-12, hoặc <b>reply</b> tin rồi gõ <code>/done</code> (hay "xong").
+• Xoá hẳn: /delete KAN-12, hoặc nhắn <code>xoá KAN-12</code> (xoá Jira là vĩnh viễn).
 
 <b>Cài đặt</b>
 • /projects · /useproject &lt;KEY&gt; · /whoami`;
 
 const DONE_RE = /done|hoàn thành|resolved|complete|đã xong|closed|xong|finish/i;
 const DONE_WORD_RE = /^(xong|done|hoàn thành|đã xong|hoàn tất|ok xong)\b/i;
+const DELETE_WORD_RE = /(xoá|xóa|huỷ|hủy|delete|remove|gỡ task|gỡ việc)/i;
 
 function isAllowed(chatId: number | string, env: any): boolean {
   const raw = (env.ALLOWED_CHAT_IDS || "").trim();
@@ -182,6 +184,16 @@ async function onCommand(text: string, chatId: number, env: any, msg: any): Prom
       return stopRecurCommand(arg, chatId, env);
     case "/done":
       return doneCommand(arg, chatId, env, msg);
+    case "/delete":
+    case "/xoa":
+    case "/xoá": {
+      const key = extractIssueKey(arg) || extractIssueKey(msg?.reply_to_message?.text);
+      if (!key) {
+        await tg.sendMessage(env, chatId, "Cú pháp: /delete KAN-12 (hoặc reply tin có mã việc rồi gõ /delete).");
+        return;
+      }
+      return deleteTask(env, chatId, key);
+    }
     default:
       await tg.sendMessage(env, chatId, "Lệnh không rõ. Gõ /help để xem hướng dẫn.");
   }
@@ -257,7 +269,14 @@ async function onNaturalText(text: string, chatId: number, env: any, msg: any): 
     }
   }
 
-  // 2. Chỉ chào hỏi -> gợi ý, KHÔNG tạo task.
+  // 2. Xoá/huỷ task: "xoá KAN-105" hoặc reply tin có mã việc + "xoá".
+  //    Chỉ kích hoạt khi có mã việc cụ thể và không phải câu "tạo/thêm/ghi".
+  if (DELETE_WORD_RE.test(text) && !/^(tạo|thêm|ghi)\b/i.test(text)) {
+    const key = extractIssueKey(text) || extractIssueKey(msg?.reply_to_message?.text);
+    if (key) return deleteTask(env, chatId, key);
+  }
+
+  // 3. Chỉ chào hỏi -> gợi ý, KHÔNG tạo task.
   if (looksLikeGreeting(text)) {
     await tg.sendMessage(env, chatId, "👋 Nhắn nội dung việc để mình tạo task, gõ /todo để xem việc tồn đọng, hoặc /help.");
     return;
@@ -530,6 +549,23 @@ async function transitionDone(env: any, chatId: number, issueKey: string): Promi
   await jira.transition(env, issueKey, t.id);
   await env.BOT_KV.delete(`due:${issueKey}`);
   return t.name;
+}
+
+// Xoá hẳn issue khỏi Jira (vĩnh viễn) + gỡ nhắc liên quan.
+async function deleteTask(env: any, chatId: number, key: string): Promise<void> {
+  try {
+    let summary = key;
+    try {
+      summary = (await jira.getIssueFields(env, key, ["summary"]))?.fields?.summary || key;
+    } catch {
+      /* lấy được summary thì hay, không thì thôi */
+    }
+    await jira.deleteIssue(env, key);
+    await env.BOT_KV.delete(`due:${key}`);
+    await tg.sendMessage(env, chatId, `🗑️ Đã xoá <b>${esc(key)}</b> — ${esc(String(summary).slice(0, 60))}.`);
+  } catch (e: any) {
+    await tg.sendMessage(env, chatId, `❌ Lỗi xoá ${esc(key)} (cần quyền Delete issue):\n<code>${esc(e.message).slice(0, 300)}</code>`);
+  }
 }
 
 async function doneCommand(arg: string, chatId: number, env: any, msg: any): Promise<void> {
