@@ -1,0 +1,14 @@
+# Copy file này thành .dev.vars (cho `wrangler dev` local) — KHÔNG commit .dev.vars.
+# Trên production, set các giá trị này bằng: npx wrangler secret put <TÊN>
+
+# Telegram — token từ @BotFather
+TELEGRAM_BOT_TOKEN=123456789:AA-your-bot-token
+
+# Chuỗi ngẫu nhiên dài bạn tự đặt; dùng để xác thực webhook Telegram.
+# Tạo nhanh:  openssl rand -hex 32
+TELEGRAM_WEBHOOK_SECRET=doi-thanh-chuoi-ngau-nhien-that-dai
+
+# Jira Cloud — email tài khoản Atlassian + API token
+# Tạo token: https://id.atlassian.com/manage-profile/security/api-tokens
+JIRA_EMAIL=ban@email.com
+JIRA_API_TOKEN=your_atlassian_api_token

@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "telegram-jira-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-23",
+  "observability": { "enabled": true },
+
+  // Cron: cứ 5 phút quét KV xem có việc nào tới hạn để nhắc.
+  // Muốn nhắc sát giờ hơn, đổi thành "*/1 * * * *".
+  "triggers": { "crons": ["*/5 * * * *"] },
+
+  // Workers AI — parse tiếng Việt ("mai 3h chiều...") thành công việc + mốc giờ.
+  "ai": { "binding": "AI" },
+
+  // KV — lưu cấu hình (project, owner chat) và lịch nhắc (nguồn sự thật cho GIỜ nhắc).
+  // Tạo bằng: npx wrangler kv namespace create BOT_KV  → dán id vào đây.
+  "kv_namespaces": [
+    { "binding": "BOT_KV", "id": "06af3f9fbe2f4105a262c72250878d4e" }
+  ],
+
+  "vars": {
+    "JIRA_BASE_URL": "https://taiducdangtran.atlassian.net",
+    "JIRA_PROJECT_KEY": "KAN",
+    "JIRA_ISSUE_TYPE": "Task",
+    "TIMEZONE": "Asia/Ho_Chi_Minh",
+    "TZ_OFFSET_MINUTES": "420",
+    "REMINDER_LEAD_MINUTES": "0",
+    "ALLOWED_CHAT_IDS": "1903279303",
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+  }
+}

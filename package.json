@@ -1,0 +1,17 @@
+{
+  "name": "telegram-jira-bot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "check": "wrangler deploy --dry-run --outdir=.dryrun",
+    "kv:create": "wrangler kv namespace create BOT_KV"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.20.0"
+  }
+}
