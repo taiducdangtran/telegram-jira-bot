@@ -32,6 +32,9 @@ const HELP = `🤖 <b>Bot quản lý việc → Jira</b>
 • Xong: nút ✅, hoặc /done KAN-12, hoặc <b>reply</b> tin rồi gõ <code>/done</code> (hay "xong").
 • Xoá hẳn: /delete KAN-12, hoặc nhắn <code>xoá KAN-12</code> (xoá Jira là vĩnh viễn).
 
+<b>↩️ Reply vào 1 task = sửa task đó</b>
+"3p nữa" / "mai 9h" → đặt nhắc · "giao cho Tú" → giao · "ưu tiên cao" · "xong" · "xoá" · câu khác → thêm ghi chú.
+
 <b>Cài đặt</b>
 • /projects · /useproject &lt;KEY&gt; · /whoami`;
 
@@ -259,20 +262,13 @@ async function noteCommand(arg: string, chatId: number, env: any): Promise<void>
 }
 
 async function onNaturalText(text: string, chatId: number, env: any, msg: any): Promise<void> {
-  // 1. Reply "xong/done" vào tin có mã việc -> hoàn thành.
-  if (msg?.reply_to_message?.text && DONE_WORD_RE.test(text)) {
-    const key = extractIssueKey(msg.reply_to_message.text);
-    if (key) {
-      const name = await transitionDone(env, chatId, key);
-      if (name) await tg.sendMessage(env, chatId, `✅ <b>Đã hoàn thành:</b> ${esc(key)} → ${esc(name)}`);
-      return;
-    }
-  }
+  // 1. Reply vào tin có mã việc -> thao tác TRÊN task đó (đặt nhắc/đổi hạn/giao/ưu tiên/done/xoá/ghi chú).
+  const replyKey = extractIssueKey(msg?.reply_to_message?.text);
+  if (replyKey) return handleReplyToTask(text, chatId, env, replyKey);
 
-  // 2. Xoá/huỷ task: "xoá KAN-105" hoặc reply tin có mã việc + "xoá".
-  //    Chỉ kích hoạt khi có mã việc cụ thể và không phải câu "tạo/thêm/ghi".
+  // 2. "xoá KAN-105" (có mã trong câu) -> xoá. Không phải câu "tạo/thêm/ghi".
   if (DELETE_WORD_RE.test(text) && !/^(tạo|thêm|ghi)\b/i.test(text)) {
-    const key = extractIssueKey(text) || extractIssueKey(msg?.reply_to_message?.text);
+    const key = extractIssueKey(text);
     if (key) return deleteTask(env, chatId, key);
   }
 
@@ -444,16 +440,21 @@ async function assignCommand(arg: string, chatId: number, env: any): Promise<voi
     await tg.sendMessage(env, chatId, "Cú pháp: /assign KAN-12 me  (hoặc /assign KAN-12 &lt;tên&gt;)");
     return;
   }
+  await applyAssign(env, chatId, key, who);
+}
+
+// Giao 1 issue cho "me" hoặc người tìm theo tên.
+async function applyAssign(env: any, chatId: number, key: string, who: string): Promise<void> {
   try {
     let accountId: string, name: string;
-    if (/^(me|tôi|toi|mình|minh|tui|t)$/i.test(who)) {
+    if (/^(me|tôi|toi|mình|minh|tui|t|bản thân)$/i.test(who)) {
       const m = await jira.myself(env);
       accountId = m.accountId;
       name = m.displayName || "bạn";
     } else {
       const us = await jira.searchAssignable(env, await getProjectKey(env), who);
       if (!us.length) {
-        await tg.sendMessage(env, chatId, `Không tìm thấy ai tên "${esc(who)}". Thử <code>/assign ${esc(key)} me</code> để giao cho bạn.`);
+        await tg.sendMessage(env, chatId, `Không tìm thấy ai tên "${esc(who)}". Thử giao cho bạn: <code>/assign ${esc(key)} me</code>.`);
         return;
       }
       accountId = us[0].accountId;
@@ -479,6 +480,11 @@ async function dueCommand(arg: string, chatId: number, env: any): Promise<void> 
     await tg.sendMessage(env, chatId, "Không hiểu thời gian. vd: 12/06 15:00, 9h30, hoặc '30 phút nữa'.");
     return;
   }
+  await applyDue(env, chatId, key, dueISO);
+}
+
+// Đặt/đổi hạn cho 1 issue + bật nhắc trong KV.
+async function applyDue(env: any, chatId: number, key: string, dueISO: string): Promise<void> {
   try {
     const y = ymd(dueISO, offsetMin(env));
     if (y) await jira.setDueDate(env, key, y);
@@ -495,7 +501,7 @@ async function dueCommand(arg: string, chatId: number, env: any): Promise<void> 
     await tg.sendMessage(
       env,
       chatId,
-      `✅ Đặt hạn <b>${esc(key)}</b>: ${esc(formatVN(dueISO, offsetMin(env)))} — mình sẽ nhắc.`,
+      `⏰ Đã đặt nhắc <b>${esc(key)}</b>: ${esc(formatVN(dueISO, offsetMin(env)))} — ${esc(String(summary).slice(0, 50))}.`,
       { reply_markup: taskButtons(key) },
     );
   } catch (e: any) {
@@ -519,6 +525,11 @@ async function prioCommand(arg: string, chatId: number, env: any): Promise<void>
     await tg.sendMessage(env, chatId, "Cú pháp: /prio KAN-12 &lt;cao nhất|cao|trung bình|thấp|thấp nhất&gt;");
     return;
   }
+  await applyPriority(env, chatId, key, raw);
+}
+
+// Đặt độ ưu tiên cho 1 issue theo từ khoá tiếng Việt/English.
+async function applyPriority(env: any, chatId: number, key: string, raw: string): Promise<void> {
   const hit = PRIO_MAP.find(([k]) => k === raw) || PRIO_MAP.find(([k]) => raw.includes(k));
   if (!hit) {
     await tg.sendMessage(env, chatId, "Mức ưu tiên: cao nhất / cao / trung bình / thấp / thấp nhất.");
@@ -565,6 +576,43 @@ async function deleteTask(env: any, chatId: number, key: string): Promise<void> 
     await tg.sendMessage(env, chatId, `🗑️ Đã xoá <b>${esc(key)}</b> — ${esc(String(summary).slice(0, 60))}.`);
   } catch (e: any) {
     await tg.sendMessage(env, chatId, `❌ Lỗi xoá ${esc(key)} (cần quyền Delete issue):\n<code>${esc(e.message).slice(0, 300)}</code>`);
+  }
+}
+
+// Reply vào tin có mã việc = THAO TÁC trên task đó (không tạo task mới).
+async function handleReplyToTask(text: string, chatId: number, env: any, key: string): Promise<void> {
+  // Hoàn thành
+  if (DONE_WORD_RE.test(text)) {
+    const name = await transitionDone(env, chatId, key);
+    if (name) await tg.sendMessage(env, chatId, `✅ <b>Đã hoàn thành:</b> ${esc(key)} → ${esc(name)}`);
+    return;
+  }
+  // Xoá
+  if (DELETE_WORD_RE.test(text) && !/^(tạo|thêm|ghi)\b/i.test(text)) {
+    return deleteTask(env, chatId, key);
+  }
+  // Giao việc: "giao cho X", "assign X", "giao t"
+  const am = text.match(/(?:giao|assign)\s+(?:cho\s+|to\s+)?(.+)/i);
+  if (am) return applyAssign(env, chatId, key, am[1].trim());
+  // Ưu tiên: "ưu tiên cao", "priority high"
+  const pm = text.match(/(?:ưu tiên|độ ưu tiên|priority)\s+(.+)/i);
+  if (pm) return applyPriority(env, chatId, key, pm[1].trim().toLowerCase());
+  // Có thời gian (tương đối / tự nhiên / tất định) -> đặt nhắc TRÊN task này.
+  const rel = parseRelative(text, env);
+  let dueISO = rel?.dueISO || null;
+  if (!dueISO) dueISO = (await parseTask(text, env)).dueISO;
+  if (!dueISO) dueISO = parseDueStrict(text, offsetMin(env), nowVN(env));
+  if (dueISO) return applyDue(env, chatId, key, dueISO);
+  // Còn lại: ghi text làm comment cho task (một dạng "cập nhật").
+  try {
+    await jira.addComment(env, key, text);
+    await tg.sendMessage(env, chatId, `💬 Đã thêm ghi chú vào <b>${esc(key)}</b>: ${esc(text.slice(0, 60))}`);
+  } catch (e: any) {
+    await tg.sendMessage(
+      env,
+      chatId,
+      `↩️ Reply <b>${esc(key)}</b> — mình hiểu: đặt nhắc ("3p nữa"/"mai 9h"), "giao cho &lt;tên&gt;", "ưu tiên cao", "xong", "xoá".`,
+    );
   }
 }
 

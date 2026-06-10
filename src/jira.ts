@@ -146,6 +146,10 @@ export const jira = {
     return jreq(env, "DELETE", `/rest/api/3/issue/${encodeURIComponent(issueKey)}`);
   },
 
+  async addComment(env: any, issueKey: string, text: string): Promise<any> {
+    return jreq(env, "POST", `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`, { body: adf(text) });
+  },
+
   issueUrl(env: any, issueKey: string): string {
     return `${base(env)}/browse/${encodeURIComponent(issueKey)}`;
   },
