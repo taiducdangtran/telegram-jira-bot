@@ -109,6 +109,39 @@ export const jira = {
     });
   },
 
+  async setPriority(env: any, issueKey: string, name: string): Promise<any> {
+    return jreq(env, "PUT", `/rest/api/3/issue/${encodeURIComponent(issueKey)}`, {
+      fields: { priority: { name } },
+    });
+  },
+
+  // Tìm việc bằng JQL (endpoint mới /search/jql). Trả mảng issues.
+  async searchJQL(env: any, jql: string, fields: string[], maxResults = 20): Promise<any[]> {
+    const data = await jreq(env, "POST", "/rest/api/3/search/jql", { jql, maxResults, fields });
+    return data?.issues || [];
+  },
+
+  async getIssueFields(env: any, issueKey: string, fields: string[]): Promise<any> {
+    return jreq(env, "GET", `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=${fields.join(",")}`);
+  },
+
+  async myself(env: any): Promise<any> {
+    return jreq(env, "GET", "/rest/api/3/myself");
+  },
+
+  async searchAssignable(env: any, projectKey: string, query: string): Promise<any[]> {
+    const data = await jreq(
+      env,
+      "GET",
+      `/rest/api/3/user/assignable/search?project=${encodeURIComponent(projectKey)}&query=${encodeURIComponent(query)}&maxResults=5`,
+    );
+    return Array.isArray(data) ? data : [];
+  },
+
+  async assign(env: any, issueKey: string, accountId: string): Promise<any> {
+    return jreq(env, "PUT", `/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`, { accountId });
+  },
+
   issueUrl(env: any, issueKey: string): string {
     return `${base(env)}/browse/${encodeURIComponent(issueKey)}`;
   },

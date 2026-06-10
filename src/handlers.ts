@@ -5,26 +5,28 @@ import { jira } from "./jira";
 import { parseTask } from "./ai";
 import {
   offsetMin, nowVN, parseDueStrict, formatVN, ymd, isoFromMs, msFromVN,
-  hhmmVN, nextDailyISO, nextWeeklyISO, parseDow, dowNameVN,
+  hhmmVN, nextDailyISO, nextWeeklyISO, parseDow, dowNameVN, parseRelative,
 } from "./time";
 
 const p2 = (n: number) => String(n).padStart(2, "0");
 
-const HELP = `🤖 <b>Bot ghi việc → Jira</b>
+const HELP = `🤖 <b>Bot quản lý việc → Jira</b>
 
 <b>Ghi việc</b>
-• Nhắn tự nhiên: "mai 3h chiều gọi khách A", "thứ 6 nộp báo cáo gấp #sales"
-  → tạo issue + tự nhắc đúng giờ. Từ "gấp/khẩn" → priority; <code>#tag</code> → nhãn.
-• /note &lt;việc&gt; — ghi nhanh, không hạn.
-• /note &lt;việc&gt; // &lt;thời gian&gt; — ghi kèm hạn chính xác.
-  vd: <code>/note Họp team // 12/06 09:30 #hop</code>
-• /list — việc một-lần đang chờ nhắc.
+• Nhắn tự nhiên: "mai 3h chiều gọi khách A", "30 phút nữa gọi shipper", "nộp báo cáo gấp #sales"
+  → tạo issue + tự nhắc. "gấp/khẩn" → priority; <code>#tag</code> → nhãn.
+• /note &lt;việc&gt; [// &lt;thời gian&gt;] — ghi tất định (không cần AI).
+
+<b>Xem & sửa việc</b>
+• /todo — liệt kê task tồn đọng (chưa Done). Hỏi "có task nào chưa làm?" cũng được.
+• /list — việc một-lần đang chờ nhắc (theo giờ).
+• /assign KAN-12 me — giao việc (hoặc &lt;tên&gt;).
+• /due KAN-12 &lt;giờ&gt; — đặt/đổi hạn (kèm nhắc). vd <code>/due KAN-12 30 phút nữa</code>.
+• /prio KAN-12 cao — đổi ưu tiên (cao nhất/cao/trung bình/thấp/thấp nhất).
 
 <b>Nhắc lặp 🔁</b>
-• /daily HH:MM &lt;việc&gt; — nhắc mỗi ngày. vd <code>/daily 08:00 Uống vitamin</code>
-• /weekly &lt;t2..t7|cn&gt; HH:MM &lt;việc&gt; — vd <code>/weekly t2 09:00 Họp đầu tuần</code>
-• Hoặc nhắn "mỗi ngày 8h uống thuốc".
-• /recurring — xem các nhắc lặp · /stoprecur &lt;id&gt; — gỡ.
+• /daily HH:MM &lt;việc&gt; · /weekly &lt;t2..t7|cn&gt; HH:MM &lt;việc&gt; · "mỗi ngày 8h ..."
+• /recurring — xem · /stoprecur &lt;id&gt; — gỡ.
 
 <b>Hoàn thành ✅</b>
 • Bấm nút ✅, hoặc /done KAN-12, hoặc <b>reply</b> tin có mã việc rồi gõ <code>/done</code> (hay "xong").
@@ -72,6 +74,24 @@ function extractIssueKey(text: string | undefined): string | null {
   if (!text) return null;
   const m = String(text).match(/\b([A-Z][A-Z0-9]+-\d+)\b/);
   return m ? m[1] : null;
+}
+
+// Câu hỏi/tra cứu việc ("có task nào tồn đọng không?") -> nên LIỆT KÊ, không tạo task.
+function looksLikeQuery(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  if (/^(tạo|thêm|ghi|nhắc|add|new)\b/.test(t)) return false; // rõ ràng là tạo việc
+  const taskWord = /(task|việc|cần làm|tồn đọng|chưa (làm|xong|hoàn)|đang làm|deadline|hạn chót|to-?do|đầu việc)/.test(t);
+  const question =
+    /\?\s*$/.test(t) ||
+    /(không|chưa)\s*\??$/.test(t) ||
+    /^(có |còn |bao nhiêu|mấy |liệt kê|xem |cho .*xem|thống kê|danh sách|list\b|show\b)/.test(t);
+  return taskWord && question;
+}
+
+// Chào hỏi / xác nhận ngắn -> không phải task.
+function looksLikeGreeting(text: string): boolean {
+  const t = text.trim();
+  return t.length <= 20 && /^(hi|hello|hey|chào|chao|alo|ok|oke|okê|okay|cảm ơn|cám ơn|thanks?|tks|ừ|uh|ờ|vâng|dạ|yes|yeah)\b/i.test(t);
 }
 
 // ---- Định tuyến update ----
@@ -142,6 +162,16 @@ async function onCommand(text: string, chatId: number, env: any, msg: any): Prom
     case "/list":
     case "/today":
       return listUpcoming(chatId, env);
+    case "/todo":
+    case "/pending":
+      return listPending(chatId, env);
+    case "/assign":
+      return assignCommand(arg, chatId, env);
+    case "/due":
+      return dueCommand(arg, chatId, env);
+    case "/prio":
+    case "/priority":
+      return prioCommand(arg, chatId, env);
     case "/daily":
       return dailyCommand(arg, chatId, env);
     case "/weekly":
@@ -217,7 +247,7 @@ async function noteCommand(arg: string, chatId: number, env: any): Promise<void>
 }
 
 async function onNaturalText(text: string, chatId: number, env: any, msg: any): Promise<void> {
-  // Reply "xong/done" vào tin có mã việc -> hoàn thành.
+  // 1. Reply "xong/done" vào tin có mã việc -> hoàn thành.
   if (msg?.reply_to_message?.text && DONE_WORD_RE.test(text)) {
     const key = extractIssueKey(msg.reply_to_message.text);
     if (key) {
@@ -227,7 +257,16 @@ async function onNaturalText(text: string, chatId: number, env: any, msg: any): 
     }
   }
 
-  // Nhắc lặp tự nhiên: "mỗi ngày 8h uống thuốc".
+  // 2. Chỉ chào hỏi -> gợi ý, KHÔNG tạo task.
+  if (looksLikeGreeting(text)) {
+    await tg.sendMessage(env, chatId, "👋 Nhắn nội dung việc để mình tạo task, gõ /todo để xem việc tồn đọng, hoặc /help.");
+    return;
+  }
+
+  // 3. Câu hỏi/tra cứu -> liệt kê việc tồn đọng (đừng biến câu hỏi thành task).
+  if (looksLikeQuery(text)) return listPending(chatId, env);
+
+  // 4. Nhắc lặp tự nhiên: "mỗi ngày 8h uống thuốc".
   if (/(mỗi|hằng|hàng)\s*ngày/i.test(text)) {
     const cleaned = text.replace(/(mỗi|hằng|hàng)\s*ngày/gi, " ").replace(/\s+/g, " ").trim();
     const { text: noTags } = extractLabels(cleaned);
@@ -237,11 +276,22 @@ async function onNaturalText(text: string, chatId: number, env: any, msg: any): 
     return;
   }
 
-  // Bình thường: tạo issue.
-  const { labels, text: noTags } = extractLabels(text);
+  // 5. "X phút/giờ nữa" -> hạn tương đối (xử lý tất định, không phụ thuộc AI).
+  const rel = parseRelative(text, env);
+  const base = rel ? rel.text : text;
+  const { labels, text: noTags } = extractLabels(base);
   const parsed = await parseTask(noTags, env);
+
+  // AI nhận diện ý định (lưới đỡ thêm cho heuristic ở trên).
+  if (parsed.action === "query") return listPending(chatId, env);
+  if (parsed.action === "chat") {
+    await tg.sendMessage(env, chatId, "Mình chưa rõ ý. Nhắn nội dung việc để tạo task, hoặc /todo để xem việc đang có.");
+    return;
+  }
+
+  const dueISO = rel?.dueISO || parsed.dueISO;
   const priority = parsed.priority || detectPriority(text);
-  await createTask(env, chatId, parsed.title, parsed.dueISO, "", { priority, labels });
+  await createTask(env, chatId, parsed.title, dueISO, "", { priority, labels });
 }
 
 async function createTask(
@@ -332,6 +382,135 @@ async function listUpcoming(chatId: number, env: any): Promise<void> {
     .join("\n");
   const more = pending.length > shown.length ? `\n… và ${pending.length - shown.length} việc khác.` : "";
   await tg.sendMessage(env, chatId, `🗓 Việc sắp tới:\n${lines}${more}`);
+}
+
+// ---- Tra cứu (query) & sửa task cũ ----
+
+async function listPending(chatId: number, env: any): Promise<void> {
+  const projectKey = await getProjectKey(env);
+  if (!projectKey) {
+    await tg.sendMessage(env, chatId, "⚠️ Chưa chọn project Jira. Gõ /projects rồi /useproject KEY.");
+    return;
+  }
+  try {
+    const jql = `project = "${projectKey}" AND statusCategory != Done ORDER BY duedate ASC, created DESC`;
+    const issues = await jira.searchJQL(env, jql, ["summary", "status", "assignee", "duedate", "priority"], 20);
+    if (!issues.length) {
+      await tg.sendMessage(env, chatId, "🎉 Không có task nào đang tồn đọng.");
+      return;
+    }
+    const lines = issues
+      .map((i: any) => {
+        const f = i.fields || {};
+        const who = f.assignee?.displayName ? `👤 ${esc(f.assignee.displayName)}` : "👤 chưa giao";
+        const due = f.duedate ? ` · ⏰ ${esc(f.duedate)}` : "";
+        const prio = f.priority?.name && f.priority.name !== "Medium" ? ` · ⚑ ${esc(f.priority.name)}` : "";
+        return `• <b>${esc(i.key)}</b> — ${esc(String(f.summary || "").slice(0, 60))}\n  ${esc(f.status?.name || "?")} · ${who}${due}${prio}`;
+      })
+      .join("\n");
+    await tg.sendMessage(
+      env,
+      chatId,
+      `📋 <b>Task tồn đọng</b> (${issues.length}):\n${lines}\n\n<i>Sửa:</i> /assign KEY ai · /due KEY giờ · /prio KEY mức · /done KEY`,
+    );
+  } catch (e: any) {
+    await tg.sendMessage(env, chatId, `❌ Lỗi tra task:\n<code>${esc(e.message).slice(0, 400)}</code>`);
+  }
+}
+
+async function assignCommand(arg: string, chatId: number, env: any): Promise<void> {
+  const key = extractIssueKey(arg);
+  const who = key ? arg.replace(key, "").trim() : "";
+  if (!key || !who) {
+    await tg.sendMessage(env, chatId, "Cú pháp: /assign KAN-12 me  (hoặc /assign KAN-12 &lt;tên&gt;)");
+    return;
+  }
+  try {
+    let accountId: string, name: string;
+    if (/^(me|tôi|toi|mình|minh|tui|t)$/i.test(who)) {
+      const m = await jira.myself(env);
+      accountId = m.accountId;
+      name = m.displayName || "bạn";
+    } else {
+      const us = await jira.searchAssignable(env, await getProjectKey(env), who);
+      if (!us.length) {
+        await tg.sendMessage(env, chatId, `Không tìm thấy ai tên "${esc(who)}". Thử <code>/assign ${esc(key)} me</code> để giao cho bạn.`);
+        return;
+      }
+      accountId = us[0].accountId;
+      name = us[0].displayName;
+    }
+    await jira.assign(env, key, accountId);
+    await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(name)}.`);
+  } catch (e: any) {
+    await tg.sendMessage(env, chatId, `❌ Lỗi giao việc:\n<code>${esc(e.message).slice(0, 300)}</code>`);
+  }
+}
+
+async function dueCommand(arg: string, chatId: number, env: any): Promise<void> {
+  const key = extractIssueKey(arg);
+  const dstr = key ? arg.replace(key, "").trim() : "";
+  if (!key || !dstr) {
+    await tg.sendMessage(env, chatId, "Cú pháp: /due KAN-12 &lt;thời gian&gt;\nvd: <code>/due KAN-12 12/06 15:00</code> hoặc <code>/due KAN-12 30 phút nữa</code>");
+    return;
+  }
+  const rel = parseRelative(dstr, env);
+  const dueISO = rel?.dueISO || parseDueStrict(dstr, offsetMin(env), nowVN(env));
+  if (!dueISO) {
+    await tg.sendMessage(env, chatId, "Không hiểu thời gian. vd: 12/06 15:00, 9h30, hoặc '30 phút nữa'.");
+    return;
+  }
+  try {
+    const y = ymd(dueISO, offsetMin(env));
+    if (y) await jira.setDueDate(env, key, y);
+    let summary = key;
+    try {
+      summary = (await jira.getIssueFields(env, key, ["summary"]))?.fields?.summary || key;
+    } catch {
+      /* không lấy được summary thì dùng key */
+    }
+    await env.BOT_KV.put(
+      `due:${key}`,
+      JSON.stringify({ issueKey: key, dueISO, chatId, summary, url: jira.issueUrl(env, key), fired: false }),
+    );
+    await tg.sendMessage(
+      env,
+      chatId,
+      `✅ Đặt hạn <b>${esc(key)}</b>: ${esc(formatVN(dueISO, offsetMin(env)))} — mình sẽ nhắc.`,
+      { reply_markup: taskButtons(key) },
+    );
+  } catch (e: any) {
+    await tg.sendMessage(env, chatId, `❌ Lỗi đặt hạn:\n<code>${esc(e.message).slice(0, 300)}</code>`);
+  }
+}
+
+// Thứ tự QUAN TRỌNG: cụm dài/đặc thù trước cụm ngắn (cho nhánh includes phía dưới).
+const PRIO_MAP: [string, string][] = [
+  ["khẩn cấp", "Highest"], ["rất cao", "Highest"], ["cao nhất", "Highest"], ["highest", "Highest"],
+  ["gấp", "High"], ["khẩn", "High"], ["cao", "High"], ["high", "High"],
+  ["trung bình", "Medium"], ["tb", "Medium"], ["vừa", "Medium"], ["medium", "Medium"],
+  ["thấp nhất", "Lowest"], ["lowest", "Lowest"],
+  ["thấp", "Low"], ["low", "Low"],
+];
+
+async function prioCommand(arg: string, chatId: number, env: any): Promise<void> {
+  const key = extractIssueKey(arg);
+  const raw = key ? arg.replace(key, "").trim().toLowerCase() : "";
+  if (!key || !raw) {
+    await tg.sendMessage(env, chatId, "Cú pháp: /prio KAN-12 &lt;cao nhất|cao|trung bình|thấp|thấp nhất&gt;");
+    return;
+  }
+  const hit = PRIO_MAP.find(([k]) => k === raw) || PRIO_MAP.find(([k]) => raw.includes(k));
+  if (!hit) {
+    await tg.sendMessage(env, chatId, "Mức ưu tiên: cao nhất / cao / trung bình / thấp / thấp nhất.");
+    return;
+  }
+  try {
+    await jira.setPriority(env, key, hit[1]);
+    await tg.sendMessage(env, chatId, `✅ <b>${esc(key)}</b> priority → ${esc(hit[1])}.`);
+  } catch (e: any) {
+    await tg.sendMessage(env, chatId, `❌ Lỗi đặt priority (project có thể không bật field này):\n<code>${esc(e.message).slice(0, 300)}</code>`);
+  }
 }
 
 // ---- Hoàn thành ----
