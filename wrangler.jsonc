@@ -5,9 +5,9 @@
   "compatibility_date": "2025-09-23",
   "observability": { "enabled": true },
 
-  // Cron: cứ 5 phút quét KV xem có việc nào tới hạn để nhắc.
-  // Muốn nhắc sát giờ hơn, đổi thành "*/1 * * * *".
-  "triggers": { "crons": ["*/5 * * * *"] },
+  // Cron: mỗi phút quét KV xem có việc nào tới hạn để nhắc.
+  // (Mỗi phút để "X phút nữa" nhắc đúng giờ ±1'; free plan thừa sức.)
+  "triggers": { "crons": ["* * * * *"] },
 
   // Workers AI — parse tiếng Việt ("mai 3h chiều...") thành công việc + mốc giờ.
   "ai": { "binding": "AI" },
