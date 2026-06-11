@@ -3,7 +3,7 @@
 import { tg, escapeHtml as esc, taskButtons } from "./telegram";
 import { jira } from "./jira";
 import { offsetMin, formatVN, ymd } from "./time";
-import { matchPriority } from "./util";
+import { matchPriority, cleanAssignee } from "./util";
 import { getProjectKey, loadByPrefix, markBotAction, clearBotAction, bumpSchedule } from "./store";
 import { findMember, notifyAssignment } from "./team";
 import type { Env, DueRecord } from "./types";
@@ -131,34 +131,51 @@ export async function listPending(chatId: number, env: Env): Promise<void> {
   }
 }
 
-// Giao 1 issue cho "me" hoặc người tìm theo tên.
-export async function applyAssign(env: Env, chatId: number, key: string, who: string): Promise<void> {
+// Giao 1 issue cho "me" hoặc nhân viên (ưu tiên người đã /team add).
+export async function applyAssign(env: Env, chatId: number, key: string, whoRaw: string): Promise<void> {
+  const who = cleanAssignee(whoRaw); // "cho Trang" -> "Trang"
+  if (!who) {
+    await tg.sendMessage(env, chatId, "Cú pháp: /assign KAN-12 me  (hoặc /assign KAN-12 &lt;tên&gt;)");
+    return;
+  }
   try {
     let accountId: string, name: string;
+    let member: Awaited<ReturnType<typeof findMember>> = null;
     const isSelf = /^(me|tôi|toi|mình|minh|tui|t|bản thân)$/i.test(who);
     if (isSelf) {
       const m = await jira.myself(env);
       accountId = m.accountId;
       name = m.displayName || "bạn";
     } else {
-      const us = await jira.searchAssignable(env, await getProjectKey(env), who);
-      if (!us.length) {
-        await tg.sendMessage(env, chatId, `Không tìm thấy ai tên "${esc(who)}". Thử giao cho bạn: <code>/assign ${esc(key)} me</code>.`);
-        return;
+      // 1. Ưu tiên người trong /team đã link Jira -> giao trên Jira + DM đều theo đúng mapping bạn đặt.
+      member = await findMember(env, { name: who });
+      if (member?.jiraAccountId) {
+        accountId = member.jiraAccountId;
+        name = member.jiraDisplayName || member.alias;
+      } else {
+        // 2. Chưa /team add (hoặc chưa link Jira) -> tìm trong user Jira của project.
+        const us = await jira.searchAssignable(env, await getProjectKey(env), who);
+        if (!us.length) {
+          await tg.sendMessage(
+            env,
+            chatId,
+            `Không tìm thấy "${esc(who)}" trên Jira.\n• Nhân viên: tạo user cho họ trên Jira + thêm vào project, rồi <code>/team add ${esc(who)} &lt;chatId&gt;</code>.\n• Hoặc giao cho bạn: <code>/assign ${esc(key)} me</code>.`,
+          );
+          return;
+        }
+        accountId = us[0].accountId;
+        name = us[0].displayName;
       }
-      accountId = us[0].accountId;
-      name = us[0].displayName;
     }
     await markBotAction(env, key, "assign"); // webhook Jira dội về sẽ biết là echo (tránh DM đôi)
     await jira.assign(env, key, accountId);
     await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(name)}.`);
 
     // DM người được giao nếu có trong /team (không DM khi giao cho chính chat đang thao tác).
-    // Tra theo TÊN ĐÃ RESOLVE từ Jira, không dùng chữ user gõ ("t"/"me" khớp mờ là DM nhầm người);
-    // tự giao cho mình ("me") thì chỉ tra accountId.
+    // Dùng lại member đã tra ở trên, hoặc tra theo accountId/tên đã RESOLVE (không dùng chữ thô).
     try {
-      const member = await findMember(env, { accountId, name: isSelf ? null : name });
-      if (member && member.chatId !== chatId) {
+      const target = member || (await findMember(env, { accountId, name: isSelf ? null : name }));
+      if (target && target.chatId !== chatId) {
         let summary = key;
         let dueText: string | null = null;
         try {
@@ -168,9 +185,9 @@ export async function applyAssign(env: Env, chatId: number, key: string, who: st
         } catch {
           /* thiếu summary thì DM bằng key */
         }
-        const resp: any = await notifyAssignment(env, member, key, summary, dueText);
+        const resp: any = await notifyAssignment(env, target, key, summary, dueText);
         if (!resp || resp.ok === false) {
-          await tg.sendMessage(env, chatId, `⚠️ Đã giao nhưng không DM được ${esc(member.alias)} (chưa bấm Start bot? Chat ID sai?).`);
+          await tg.sendMessage(env, chatId, `⚠️ Đã giao nhưng không DM được ${esc(target.alias)} (chưa bấm Start bot? Chat ID sai?).`);
         }
       }
     } catch (e) {

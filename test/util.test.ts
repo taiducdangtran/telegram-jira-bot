@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractLabels, detectPriority, extractIssueKey, looksLikeQuery, looksLikeGreeting,
-  parseClock, matchPriority, validateProjectKey, safeParse, p2,
+  parseClock, matchPriority, validateProjectKey, safeParse, p2, cleanAssignee,
 } from "../src/util";
 
 describe("extractLabels", () => {
@@ -123,6 +123,18 @@ describe("validateProjectKey", () => {
     expect(validateProjectKey('KAN" OR 1=1')).toBe(false);
     expect(validateProjectKey("2AB")).toBe(false); // phải bắt đầu bằng chữ
     expect(validateProjectKey("AAAAAAAAAAAA")).toBe(false); // quá dài
+  });
+});
+
+describe("cleanAssignee", () => {
+  it("bỏ 'cho'/'to' đứng đầu", () => {
+    expect(cleanAssignee("cho Trang")).toBe("Trang");
+    expect(cleanAssignee("to John")).toBe("John");
+    expect(cleanAssignee("Cẩm Cần")).toBe("Cẩm Cần"); // không có tiền tố thì giữ nguyên
+    expect(cleanAssignee("cho")).toBe(""); // chỉ có 'cho' -> rỗng
+  });
+  it("không cắt nhầm tên bắt đầu bằng 'cho' liền chữ", () => {
+    expect(cleanAssignee("Chương")).toBe("Chương");
   });
 });
 

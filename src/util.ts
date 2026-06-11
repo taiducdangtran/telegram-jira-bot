@@ -78,6 +78,12 @@ export function matchPriority(raw: string): string | null {
   return hit ? hit[1] : null;
 }
 
+// Bỏ "cho"/"to" đứng đầu khi giao việc: "cho Trang" -> "Trang", "cho" -> "".
+// Dùng \b để không cắt nhầm tên dính liền ("Chương" giữ nguyên).
+export function cleanAssignee(raw: string): string {
+  return String(raw).replace(/^(cho|to)\b\s*/i, "").trim();
+}
+
 // Project key Jira hợp lệ: chữ hoa đầu, chữ hoa/số phía sau, tối đa 10 ký tự.
 // Phòng thủ trước khi nội suy vào JQL (/useproject đã xác thực qua API rồi).
 export function validateProjectKey(key: string): boolean {
