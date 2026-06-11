@@ -163,11 +163,18 @@ Cách bật (sau khi đã `wrangler secret put JIRA_WEBHOOK_SECRET` và deploy):
 ## Thông báo người được giao việc (/team)
 
 Bot DM cho thành viên khi họ được giao task — qua `/assign`, reply "giao cho Tú",
-hoặc đổi assignee ngay trên Jira.
+hoặc đổi assignee ngay trên Jira. **Không cần tạo user Jira cho nhân viên.**
 
 1. Thành viên mở bot, bấm **Start** rồi nhắn gì đó → bot trả về **Chat ID** của họ.
 2. Thành viên gửi Chat ID đó cho bạn (admin).
-3. Bạn gõ: `/team add Tú 123456789`. Bot tự khớp tên với user Jira (để nhận ra khi giao trên Jira UI).
+3. Bạn gõ: `/team add Tú 123456789`.
+
+Sau đó `/assign KAN-12 Tú` (hoặc reply "giao cho Tú") → bot **DM Tú trên Telegram**
+kèm thông tin task **+ ghi chú "Giao cho Tú" lên Jira**. Cột Assignee trên Jira
+giữ nguyên (chế độ gọn — không tốn ghế Jira, không phải mời ai vào project).
+
+> Nếu sau này bạn *có* tạo user Jira thật tên Tú (mời vào project) và `/team add` lại,
+> bot sẽ tự nhận ra và set luôn cột **Assignee** thay vì chỉ ghi chú.
 
 > **Phân quyền:** `ALLOWED_CHAT_IDS` vẫn là cổng duy nhất cho lệnh/nút. Thành viên trong
 > `/team` **chỉ nhận thông báo** — không gửi lệnh hay bấm nút được. Telegram chỉ cho bot

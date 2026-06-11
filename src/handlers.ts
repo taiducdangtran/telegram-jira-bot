@@ -43,9 +43,10 @@ const HELP = `🤖 <b>Bot quản lý việc → Jira</b>
 <b>↩️ Reply vào 1 task = sửa task đó</b>
 "3p nữa" / "mai 9h" → đặt nhắc · "giao cho Tú" → giao · "ưu tiên cao" · "xong" · "xoá" · câu khác → thêm ghi chú.
 
-<b>Đội 👥</b>
+<b>Đội 👥 (DM nhân viên, khỏi cần tạo user Jira)</b>
 • /team add &lt;tên&gt; &lt;chatId&gt; · /team list · /team del &lt;tên&gt;
-  Ai trong đội được giao việc (qua /assign, "giao cho Tú", hay trên Jira) → bot DM người đó.
+  Nhân viên bấm Start bot → bot trả Chat ID → bạn /team add. Rồi /assign KAN-12 &lt;tên&gt;
+  (hay "giao cho Tú") → bot DM người đó + ghi chú lên Jira.
 
 <b>Cài đặt</b>
 • /projects · /useproject &lt;KEY&gt; · /whoami`;

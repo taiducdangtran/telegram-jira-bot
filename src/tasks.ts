@@ -6,7 +6,7 @@ import { offsetMin, formatVN, ymd } from "./time";
 import { matchPriority, cleanAssignee } from "./util";
 import { getProjectKey, loadByPrefix, markBotAction, clearBotAction, bumpSchedule } from "./store";
 import { findMember, notifyAssignment } from "./team";
-import type { Env, DueRecord } from "./types";
+import type { Env, DueRecord, TeamMember } from "./types";
 
 export const DONE_RE = /done|hoàn thành|resolved|complete|đã xong|closed|xong|finish/i;
 
@@ -131,65 +131,90 @@ export async function listPending(chatId: number, env: Env): Promise<void> {
   }
 }
 
-// Giao 1 issue cho "me" hoặc nhân viên (ưu tiên người đã /team add).
+// DM người được giao (lấy summary + hạn từ Jira). Báo admin nếu DM hỏng.
+async function dmAssignee(env: Env, adminChatId: number, member: TeamMember, key: string): Promise<void> {
+  if (member.chatId === adminChatId) return; // đừng DM chính người đang thao tác
+  let summary = key;
+  let dueText: string | null = null;
+  try {
+    const f = (await jira.getIssueFields(env, key, ["summary", "duedate"]))?.fields;
+    summary = f?.summary || key;
+    dueText = f?.duedate || null; // Jira duedate chỉ có ngày YYYY-MM-DD
+  } catch {
+    /* thiếu summary thì DM bằng key */
+  }
+  const resp: any = await notifyAssignment(env, member, key, summary, dueText);
+  if (!resp || resp.ok === false) {
+    await tg.sendMessage(env, adminChatId, `⚠️ Đã giao nhưng không DM được ${esc(member.alias)} (chưa bấm Start bot? Chat ID sai?).`);
+  }
+}
+
+// Giao 1 issue. Ba đường:
+//  - "me"            -> set Assignee Jira = mình.
+//  - trong /team, ĐÃ link Jira -> set Assignee Jira = người đó + DM.
+//  - trong /team, CHƯA link Jira (chế độ gọn, khỏi tạo user Jira) -> ghi chú lên Jira + DM,
+//    KHÔNG đụng cột Assignee.
+//  - không trong /team -> thử tìm user Jira thật của project.
 export async function applyAssign(env: Env, chatId: number, key: string, whoRaw: string): Promise<void> {
   const who = cleanAssignee(whoRaw); // "cho Trang" -> "Trang"
   if (!who) {
     await tg.sendMessage(env, chatId, "Cú pháp: /assign KAN-12 me  (hoặc /assign KAN-12 &lt;tên&gt;)");
     return;
   }
+
+  // Giao cho chính mình.
+  if (/^(me|tôi|toi|mình|minh|tui|t|bản thân)$/i.test(who)) {
+    try {
+      const m = await jira.myself(env);
+      await markBotAction(env, key, "assign");
+      await jira.assign(env, key, m.accountId);
+      await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(m.displayName || "bạn")}.`);
+    } catch (e: any) {
+      await clearBotAction(env, key, "assign").catch(() => {});
+      await tg.sendMessage(env, chatId, `❌ Lỗi giao việc:\n<code>${esc(e.message).slice(0, 300)}</code>`);
+    }
+    return;
+  }
+
+  const member = await findMember(env, { name: who });
+
+  // Có trong /team nhưng CHƯA link Jira -> chế độ DM-only: ghi chú + DM, không set Assignee.
+  if (member && !member.jiraAccountId) {
+    try {
+      await jira.addComment(env, key, `📌 Giao cho ${member.alias} (qua Telegram bot).`).catch(() => {});
+      await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(member.alias)} — đã DM + ghi chú lên Jira (cột Assignee giữ nguyên).`);
+      await dmAssignee(env, chatId, member, key);
+    } catch (e: any) {
+      await tg.sendMessage(env, chatId, `❌ Lỗi giao việc:\n<code>${esc(e.message).slice(0, 300)}</code>`);
+    }
+    return;
+  }
+
+  // Còn lại: cần set Assignee Jira (member đã link Jira, hoặc user Jira thật của project).
   try {
     let accountId: string, name: string;
-    let member: Awaited<ReturnType<typeof findMember>> = null;
-    const isSelf = /^(me|tôi|toi|mình|minh|tui|t|bản thân)$/i.test(who);
-    if (isSelf) {
-      const m = await jira.myself(env);
-      accountId = m.accountId;
-      name = m.displayName || "bạn";
+    if (member?.jiraAccountId) {
+      accountId = member.jiraAccountId;
+      name = member.jiraDisplayName || member.alias;
     } else {
-      // 1. Ưu tiên người trong /team đã link Jira -> giao trên Jira + DM đều theo đúng mapping bạn đặt.
-      member = await findMember(env, { name: who });
-      if (member?.jiraAccountId) {
-        accountId = member.jiraAccountId;
-        name = member.jiraDisplayName || member.alias;
-      } else {
-        // 2. Chưa /team add (hoặc chưa link Jira) -> tìm trong user Jira của project.
-        const us = await jira.searchAssignable(env, await getProjectKey(env), who);
-        if (!us.length) {
-          await tg.sendMessage(
-            env,
-            chatId,
-            `Không tìm thấy "${esc(who)}" trên Jira.\n• Nhân viên: tạo user cho họ trên Jira + thêm vào project, rồi <code>/team add ${esc(who)} &lt;chatId&gt;</code>.\n• Hoặc giao cho bạn: <code>/assign ${esc(key)} me</code>.`,
-          );
-          return;
-        }
-        accountId = us[0].accountId;
-        name = us[0].displayName;
+      const us = await jira.searchAssignable(env, await getProjectKey(env), who);
+      if (!us.length) {
+        await tg.sendMessage(
+          env,
+          chatId,
+          `Không thấy "${esc(who)}" trong đội. Thêm: <code>/team add ${esc(who)} &lt;chatId&gt;</code> (nhân viên bấm Start bot để lấy Chat ID), rồi giao lại.\nHoặc giao cho bạn: <code>/assign ${esc(key)} me</code>.`,
+        );
+        return;
       }
+      accountId = us[0].accountId;
+      name = us[0].displayName;
     }
     await markBotAction(env, key, "assign"); // webhook Jira dội về sẽ biết là echo (tránh DM đôi)
     await jira.assign(env, key, accountId);
     await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(name)}.`);
-
-    // DM người được giao nếu có trong /team (không DM khi giao cho chính chat đang thao tác).
-    // Dùng lại member đã tra ở trên, hoặc tra theo accountId/tên đã RESOLVE (không dùng chữ thô).
     try {
-      const target = member || (await findMember(env, { accountId, name: isSelf ? null : name }));
-      if (target && target.chatId !== chatId) {
-        let summary = key;
-        let dueText: string | null = null;
-        try {
-          const f = (await jira.getIssueFields(env, key, ["summary", "duedate"]))?.fields;
-          summary = f?.summary || key;
-          dueText = f?.duedate || null; // Jira duedate chỉ có ngày YYYY-MM-DD
-        } catch {
-          /* thiếu summary thì DM bằng key */
-        }
-        const resp: any = await notifyAssignment(env, target, key, summary, dueText);
-        if (!resp || resp.ok === false) {
-          await tg.sendMessage(env, chatId, `⚠️ Đã giao nhưng không DM được ${esc(target.alias)} (chưa bấm Start bot? Chat ID sai?).`);
-        }
-      }
+      const target = member || (await findMember(env, { accountId, name }));
+      if (target) await dmAssignee(env, chatId, target, key);
     } catch (e) {
       console.error("notify assignee failed", key, e);
     }

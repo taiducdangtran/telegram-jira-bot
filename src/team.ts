@@ -76,8 +76,8 @@ async function teamAdd(arg: string, chatId: number, env: Env): Promise<void> {
   await env.BOT_KV.put(`team:${normName(alias)}`, JSON.stringify(member));
   let msg = `✅ Đã thêm <b>${esc(alias)}</b> (chat <code>${esc(idTok)}</code>).`;
   msg += member.jiraDisplayName
-    ? `\n🔗 Khớp Jira: ${esc(member.jiraDisplayName)}.`
-    : `\n⚠️ Chưa khớp được user Jira tên "${esc(alias)}" — DM khi /assign vẫn chạy, nhưng giao việc từ Jira UI sẽ không nhận ra người này.`;
+    ? `\n🔗 Có sẵn user Jira "${esc(member.jiraDisplayName)}" — giao việc sẽ set luôn cột Assignee.`
+    : `\n✓ Chế độ gọn: <code>/assign ${esc(alias)}</code> sẽ DM ${esc(alias)} + ghi chú lên Jira (khỏi cần tạo user Jira).`;
   if (old && old.chatId !== member.chatId) {
     msg += `\n⚠️ Đã GHI ĐÈ "${esc(old.alias)}" (chat ${old.chatId}) — hai tên trùng nhau sau khi bỏ dấu.`;
   }
