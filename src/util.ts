@@ -78,6 +78,14 @@ export function matchPriority(raw: string): string | null {
   return hit ? hit[1] : null;
 }
 
+// Nhiều lệnh dán 1 lúc (mỗi dòng 1 lệnh) -> tách ra chạy lần lượt.
+// Chỉ coi là "batch" khi có >=2 dòng bắt đầu bằng "/" (tránh cắt nhầm ghi chú nhiều dòng).
+export function splitBatchCommands(text: string): string[] | null {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const cmds = lines.filter((l) => l.startsWith("/"));
+  return cmds.length >= 2 ? cmds : null;
+}
+
 // Bỏ "cho"/"to" đứng đầu khi giao việc: "cho Trang" -> "Trang", "cho" -> "".
 // Dùng \b để không cắt nhầm tên dính liền ("Chương" giữ nguyên).
 export function cleanAssignee(raw: string): string {

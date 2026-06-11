@@ -8,7 +8,7 @@ import {
   offsetMin, nowVN, parseDueStrict, formatVN,
   hhmmVN, nextDailyISO, nextWeeklyISO, parseDow, dowNameVN, parseRelative,
 } from "./time";
-import { p2, extractLabels, detectPriority, extractIssueKey, looksLikeQuery, looksLikeGreeting, parseClock, validateProjectKey } from "./util";
+import { p2, extractLabels, detectPriority, extractIssueKey, looksLikeQuery, looksLikeGreeting, parseClock, validateProjectKey, splitBatchCommands } from "./util";
 import { isAllowed, loadByPrefix, rememberOwnerChat, bumpSchedule } from "./store";
 import {
   createTask, listUpcoming, listPending, applyAssign, applyDue, applyPriority,
@@ -109,6 +109,12 @@ export async function onUpdate(update: any, env: Env): Promise<void> {
   const text = msg.text.trim();
   if (!text) {
     await tg.sendMessage(env, chatId, "Nhắn nội dung việc giúp mình nhé (gõ /help để xem cách dùng).");
+    return;
+  }
+  // Dán nhiều lệnh 1 lúc (mỗi dòng 1 lệnh) -> chạy lần lượt từng dòng.
+  const batch = splitBatchCommands(text);
+  if (batch) {
+    for (const line of batch) await onCommand(line, chatId, env, msg);
     return;
   }
   if (text.startsWith("/")) return onCommand(text, chatId, env, msg);

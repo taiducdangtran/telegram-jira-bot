@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractLabels, detectPriority, extractIssueKey, looksLikeQuery, looksLikeGreeting,
-  parseClock, matchPriority, validateProjectKey, safeParse, p2, cleanAssignee,
+  parseClock, matchPriority, validateProjectKey, safeParse, p2, cleanAssignee, splitBatchCommands,
 } from "../src/util";
 
 describe("extractLabels", () => {
@@ -123,6 +123,28 @@ describe("validateProjectKey", () => {
     expect(validateProjectKey('KAN" OR 1=1')).toBe(false);
     expect(validateProjectKey("2AB")).toBe(false); // phải bắt đầu bằng chữ
     expect(validateProjectKey("AAAAAAAAAAAA")).toBe(false); // quá dài
+  });
+});
+
+describe("splitBatchCommands", () => {
+  it("nhiều lệnh mỗi dòng -> tách ra", () => {
+    expect(splitBatchCommands("/team add A 1\n/team add B 2")).toEqual([
+      "/team add A 1", "/team add B 2",
+    ]);
+  });
+  it("bỏ qua dòng trống, trim từng dòng", () => {
+    expect(splitBatchCommands("/done KAN-1\n\n  /done KAN-2  ")).toEqual([
+      "/done KAN-1", "/done KAN-2",
+    ]);
+  });
+  it("1 lệnh đơn -> null (đi đường thường)", () => {
+    expect(splitBatchCommands("/team list")).toBeNull();
+  });
+  it("ghi chú nhiều dòng (không phải lệnh) -> null", () => {
+    expect(splitBatchCommands("mai 3h gọi khách\nnhớ mang hợp đồng")).toBeNull();
+  });
+  it("1 lệnh + dòng mô tả -> null (không cắt nhầm)", () => {
+    expect(splitBatchCommands("/note làm báo cáo\nchi tiết thêm ở đây")).toBeNull();
   });
 });
 
