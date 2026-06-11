@@ -16,6 +16,22 @@ export interface ParsedTask {
 
 const PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
 
+// Workers AI free đôi khi xếp hàng RẤT lâu. Worker chỉ được chạy nền ~30s sau khi
+// trả response — AI ngốn hết phần đó là bot bị ngắt TRƯỚC KHI kịp nhắn trả lời
+// (đã xảy ra thật: issue tạo xong mà tin xác nhận không bao giờ tới). Quá hạn này
+// thì bỏ AI, đi đường fallback để chắc chắn còn thời gian tạo issue + trả lời.
+const AI_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`AI timeout sau ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
 export async function parseTask(text: string, env: Env): Promise<ParsedTask> {
   const model = env.AI_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
   const off = offsetStr(offsetMin(env));
@@ -32,14 +48,17 @@ export async function parseTask(text: string, env: Env): Promise<ParsedTask> {
   ].join("\n");
 
   try {
-    const resp: any = await env.AI.run(model as any, {
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: text },
-      ],
-      max_tokens: 256,
-      temperature: 0.1,
-    });
+    const resp: any = await withTimeout(
+      env.AI.run(model as any, {
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: text },
+        ],
+        max_tokens: 256,
+        temperature: 0.1,
+      }) as Promise<any>,
+      AI_TIMEOUT_MS,
+    );
     const raw = typeof resp === "string" ? resp : resp?.response ?? "";
     const obj = extractJson(raw);
     if (!obj) {
