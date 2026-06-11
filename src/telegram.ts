@@ -1,10 +1,12 @@
 // Bọc mỏng Telegram Bot API (chỉ những method bot này cần).
+import type { Env } from "./types";
 
-function api(env: any, method: string): string {
+
+function api(env: Env, method: string): string {
   return `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 }
 
-async function call(env: any, method: string, payload: Record<string, unknown>): Promise<any> {
+async function call(env: Env, method: string, payload: Record<string, unknown>): Promise<any> {
   const res = await fetch(api(env, method), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -25,7 +27,7 @@ function clamp(text: string): string {
 }
 
 export const tg = {
-  sendMessage: (env: any, chatId: number | string, text: string, extra: Record<string, unknown> = {}) =>
+  sendMessage: (env: Env, chatId: number | string, text: string, extra: Record<string, unknown> = {}) =>
     call(env, "sendMessage", {
       chat_id: chatId,
       text: clamp(text),
@@ -34,10 +36,10 @@ export const tg = {
       ...extra,
     }),
 
-  answerCallback: (env: any, id: string, text = "") =>
+  answerCallback: (env: Env, id: string, text = "") =>
     call(env, "answerCallbackQuery", { callback_query_id: id, text }),
 
-  editText: (env: any, chatId: number | string, messageId: number, text: string, extra: Record<string, unknown> = {}) =>
+  editText: (env: Env, chatId: number | string, messageId: number, text: string, extra: Record<string, unknown> = {}) =>
     call(env, "editMessageText", {
       chat_id: chatId,
       message_id: messageId,

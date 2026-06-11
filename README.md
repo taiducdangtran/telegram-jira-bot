@@ -12,12 +12,12 @@ Chạy hoàn toàn trên **Cloudflare Workers** (miễn phí, 24/7). Không cầ
 
 ```
 Telegram  ──POST /webhook──▶  Cloudflare Worker ──REST──▶  Jira Cloud (tạo issue)
-                                     │
+                                     │      ◀──POST /jira-webhook── Jira (Done/xoá/đổi hạn/giao)
                                      ├── Workers AI  (parse "mai 3h chiều" → giờ cụ thể)
                                      │
-                                     └── KV  (lưu GIỜ nhắc + project/owner)
+                                     └── KV  (lưu GIỜ nhắc + project/owner/đội)
                                           ▲
-   Cron Trigger (mỗi 5') ───────────────┘  quét KV, tới giờ thì bắn nhắc về Telegram
+   Cron Trigger (mỗi 1') ───────────────┘  quét KV, tới giờ thì bắn nhắc về Telegram
 ```
 
 > **Vì sao KV giữ giờ nhắc?** Jira `duedate` chỉ có **ngày, không có giờ**. Nên giờ-phút
@@ -67,6 +67,7 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN       # token từ BotFather
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET  # tự đặt 1 chuỗi dài, vd: openssl rand -hex 32
 npx wrangler secret put JIRA_EMAIL               # email Atlassian
 npx wrangler secret put JIRA_API_TOKEN           # API token Jira
+npx wrangler secret put JIRA_WEBHOOK_SECRET      # chuỗi dài khác — cho Jira → Telegram sync (mục bên dưới)
 ```
 
 Deploy:
@@ -115,13 +116,62 @@ mỗi ngày 8h uống thuốc          → tương đương /daily (câu tự nh
 # Hoàn thành ✅
 /done KAN-12                    → chuyển issue sang Done
 (reply tin có mã việc) /done    → hoặc nhắn "xong" khi reply
+
+# Đội 👥 (DM người được giao việc)
+/team add Tú 123456789          → thêm Tú (chat id) vào đội
+/team list · /team del Tú      → xem / gỡ
+/assign KAN-12 Tú               → giao việc + bot DM Tú thông tin task
 ```
+
+> **Lưu ý:** tin nhắn đã gửi mà **sửa lại** (edit) sẽ KHÔNG tạo lại task — muốn việc mới thì nhắn tin mới.
 
 **Priority & nhãn:** từ khoá "gấp/khẩn/ưu tiên cao" → priority (High/Highest), "không gấp/ưu tiên
 thấp" → Low; `#tag` bất kỳ → Jira label. Project không hỗ trợ field nào thì bot tự bỏ qua field đó.
 
 Khi tới giờ, bot gửi tin nhắc kèm nút: **✅ Hoàn thành** (chuyển issue sang Done) ·
 **⏰ +1h** · **🌅 Sáng mai**. Nhắc lặp có nút **✖ Dừng lặp**.
+
+---
+
+## Đồng bộ Jira → Telegram (webhook)
+
+Khi issue bị **chuyển Done / xoá / đổi hạn / giao cho người khác** ngay trên Jira (web/app),
+bot sẽ biết: tự gỡ/cập nhật nhắc trong KV và báo về Telegram. Thao tác do **chính bot** gây ra
+(vd `/done` từ Telegram) sẽ không bị báo dội lại (echo suppression, marker TTL 2 phút).
+
+Cách bật (sau khi đã `wrangler secret put JIRA_WEBHOOK_SECRET` và deploy):
+
+1. Vào Jira → ⚙️ **Settings → System** → sidebar **WebHooks** → **Create a WebHook**.
+2. Điền:
+   - **Name**: `telegram-jira-bot`
+   - **URL**: `https://telegram-jira-bot.<account>.workers.dev/jira-webhook?s=<JIRA_WEBHOOK_SECRET>`
+   - **JQL**: `project = KAN` (đổi theo project của bạn)
+   - **Events**: Issue → ☑ **updated**, ☑ **deleted**
+3. Save. Thử đổi hạn 1 issue trên Jira — Telegram phải nhận được tin trong vài giây.
+
+> Secret nằm trên URL vì Jira webhook không gửi được custom header — coi trang cấu hình
+> WebHooks là nhạy cảm. Muốn xoay secret: đặt secret mới + sửa URL webhook.
+>
+> Có thể thử đăng ký bằng script `./scripts/register-jira-webhook.sh` (endpoint legacy,
+> cần quyền site admin); script báo 403/404 thì dùng UI như trên.
+>
+> Jira `duedate` chỉ có ngày — đổi hạn trên Jira sẽ **giữ nguyên giờ-phút nhắc cũ**
+> (chưa có nhắc thì mặc định 09:00).
+
+---
+
+## Thông báo người được giao việc (/team)
+
+Bot DM cho thành viên khi họ được giao task — qua `/assign`, reply "giao cho Tú",
+hoặc đổi assignee ngay trên Jira.
+
+1. Thành viên mở bot, bấm **Start** rồi nhắn gì đó → bot trả về **Chat ID** của họ.
+2. Thành viên gửi Chat ID đó cho bạn (admin).
+3. Bạn gõ: `/team add Tú 123456789`. Bot tự khớp tên với user Jira (để nhận ra khi giao trên Jira UI).
+
+> **Phân quyền:** `ALLOWED_CHAT_IDS` vẫn là cổng duy nhất cho lệnh/nút. Thành viên trong
+> `/team` **chỉ nhận thông báo** — không gửi lệnh hay bấm nút được. Telegram chỉ cho bot
+> DM người đã bấm Start ít nhất một lần.
 
 ---
 
@@ -146,7 +196,7 @@ Cách mở khoá cho riêng bạn:
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `REMINDER_LEAD_MINUTES` | `0` | Nhắc trước hạn bao nhiêu phút (vd `30` = nhắc sớm 30'). |
-| `triggers.crons` | `*/5 * * * *` | Tần suất quét. Với mặc định `*/5`, tin nhắc đến **trong vòng 0–5 phút sau hạn**; đặt `REMINDER_LEAD_MINUTES=5` hoặc đổi cron sang `*/1 * * * *` để sát giờ hơn. |
+| `triggers.crons` | `* * * * *` | Tần suất tick (mỗi phút). Tin nhắc đến **trong vòng 0–1 phút sau hạn**. Bot chỉ thực sự quét KV khi *có thể* có việc tới hạn (hint `idx:scan`, ép quét lại mỗi 10') nên không vượt quota ~1.000 list ops/ngày của free plan. |
 | `AI_MODEL` | llama-3.3-70b | Model Workers AI parse tiếng Việt. |
 | `JIRA_ISSUE_TYPE` | `Task` | Loại issue tạo ra. |
 | `TZ_OFFSET_MINUTES` | `420` | Lệch múi giờ (VN = 420 = UTC+7). |
@@ -158,6 +208,7 @@ Cách mở khoá cho riêng bạn:
 ```bash
 cp .dev.vars.example .dev.vars   # điền token vào .dev.vars (KHÔNG commit)
 npm run dev                      # chạy Worker local; dùng ngrok nếu muốn nhận webhook thật
+npm test                         # unit test (vitest) cho parse thời gian + helper thuần
 npm run check                    # build thử (dry-run), không deploy
 npm run tail                     # xem log realtime của Worker đã deploy
 ```
@@ -170,4 +221,6 @@ npm run tail                     # xem log realtime của Worker đã deploy
   Hay gặp: sai `TELEGRAM_WEBHOOK_SECRET` (403) hoặc chưa deploy.
 - **Nút ✅ báo "không thấy trạng thái Done"**: workflow project dùng tên khác (vd "Hoàn tất").
   Bot sẽ in danh sách trạng thái; đổi tên cột trong Jira hoặc cập nhật `DONE_RE` trong
-  `src/handlers.ts`.
+  `src/tasks.ts`.
+- **Đổi hạn/Done trên Jira mà Telegram không báo**: kiểm tra webhook Jira (Settings → System →
+  WebHooks) — URL đúng `?s=<secret>`, JQL đúng project; xem log bằng `npm run tail`.

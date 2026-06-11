@@ -1,8 +1,12 @@
 // Cloudflare Worker entrypoint.
-//  - fetch:     nhận webhook Telegram (POST /webhook), trả 200 ngay, xử lý nền.
+//  - fetch:     nhận webhook Telegram (POST /webhook) + webhook Jira (POST /jira-webhook),
+//               trả 200 ngay, xử lý nền.
 //  - scheduled: Cron Trigger quét KV và bắn nhắc lịch.
 
-import { onUpdate, runReminders, runRecurring } from "./handlers";
+import { onUpdate } from "./handlers";
+import { runScheduled } from "./cron";
+import { onJiraWebhook } from "./jira-webhook";
+import type { Env } from "./types";
 
 // So sánh constant-time để không rò rỉ secret qua thời gian phản hồi.
 function timingSafeEqual(a: string, b: string): boolean {
@@ -16,7 +20,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 export default {
-  async fetch(req: Request, env: any, ctx: ExecutionContext): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
 
     if (req.method === "POST" && url.pathname === "/webhook") {
@@ -37,18 +41,31 @@ export default {
       return new Response("ok");
     }
 
+    if (req.method === "POST" && url.pathname === "/jira-webhook") {
+      // Jira webhook không gửi được custom header -> secret nằm ở query (?s=...).
+      const s = url.searchParams.get("s") || "";
+      const secret = env.JIRA_WEBHOOK_SECRET;
+      if (!secret || !timingSafeEqual(s, secret)) {
+        return new Response("forbidden", { status: 403 });
+      }
+      let payload: any;
+      try {
+        payload = await req.json();
+      } catch {
+        return new Response("bad request", { status: 400 });
+      }
+      // Luôn trả 200 nhanh — Jira tự TẮT webhook nào hay lỗi/chậm.
+      ctx.waitUntil(onJiraWebhook(payload, env).catch((e) => console.error("jiraWebhook", e)));
+      return new Response("ok");
+    }
+
     if (url.pathname === "/" || url.pathname === "") {
       return new Response("Telegram → Jira bot is running.");
     }
     return new Response("not found", { status: 404 });
   },
 
-  async scheduled(_event: ScheduledController, env: any, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(
-      Promise.all([
-        runReminders(env).catch((e) => console.error("reminders", e)),
-        runRecurring(env).catch((e) => console.error("recurring", e)),
-      ]),
-    );
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runScheduled(env).catch((e) => console.error("scheduled", e)));
   },
 };

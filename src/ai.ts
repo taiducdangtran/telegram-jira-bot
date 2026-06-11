@@ -2,6 +2,7 @@
 // Nếu AI lỗi/không hiểu giờ, vẫn trả title = nguyên văn để KHÔNG mất việc.
 
 import { vnNowDescription, offsetStr, offsetMin, normalizeDueISO } from "./time";
+import type { Env } from "./types";
 
 export type Intent = "create" | "query" | "chat";
 
@@ -10,11 +11,12 @@ export interface ParsedTask {
   title: string;
   dueISO: string | null;
   priority: string | null;
+  aiFallback: boolean; // true = AI lỗi/không trả JSON -> title là nguyên văn tin nhắn
 }
 
 const PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
 
-export async function parseTask(text: string, env: any): Promise<ParsedTask> {
+export async function parseTask(text: string, env: Env): Promise<ParsedTask> {
   const model = env.AI_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
   const off = offsetStr(offsetMin(env));
   const system = [
@@ -30,7 +32,7 @@ export async function parseTask(text: string, env: any): Promise<ParsedTask> {
   ].join("\n");
 
   try {
-    const resp: any = await env.AI.run(model, {
+    const resp: any = await env.AI.run(model as any, {
       messages: [
         { role: "system", content: system },
         { role: "user", content: text },
@@ -40,15 +42,19 @@ export async function parseTask(text: string, env: any): Promise<ParsedTask> {
     });
     const raw = typeof resp === "string" ? resp : resp?.response ?? "";
     const obj = extractJson(raw);
-    if (!obj) return { action: "create", title: text, dueISO: null, priority: null };
+    if (!obj) {
+      // Model trả chữ thừa/JSON hỏng — log để soi bằng wrangler tail, đừng nuốt im lặng.
+      console.error("AI parse: không bóc được JSON", String(raw).slice(0, 200));
+      return { action: "create", title: text, dueISO: null, priority: null, aiFallback: true };
+    }
     const action: Intent = obj.action === "query" || obj.action === "chat" ? obj.action : "create";
     const title = (obj.title && String(obj.title).trim()) || text;
     const dueISO = obj.due ? normalizeDueISO(String(obj.due), offsetMin(env)) : null;
     const priority = obj.priority && PRIORITIES.includes(String(obj.priority)) ? String(obj.priority) : null;
-    return { action, title, dueISO, priority };
+    return { action, title, dueISO, priority, aiFallback: false };
   } catch (e) {
     console.error("AI parse failed", e);
-    return { action: "create", title: text, dueISO: null, priority: null };
+    return { action: "create", title: text, dueISO: null, priority: null, aiFallback: true };
   }
 }
 

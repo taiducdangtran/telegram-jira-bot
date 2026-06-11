@@ -1,4 +1,6 @@
 // Tiện ích thời gian theo múi giờ Việt Nam (UTC+7, không có DST nên offset cố định).
+import type { TzEnv } from "./types";
+
 // Mọi mốc giờ "đầy đủ" được lưu dạng ISO 8601 kèm offset, ví dụ 2026-06-12T15:00:00+07:00.
 
 const DOW = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
@@ -7,7 +9,7 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-export function offsetMin(env: any): number {
+export function offsetMin(env: TzEnv): number {
   const v = parseInt(env?.TZ_OFFSET_MINUTES ?? "420", 10);
   return Number.isFinite(v) ? v : 420;
 }
@@ -19,7 +21,7 @@ export function offsetStr(min: number): string {
 }
 
 // Date có các getter UTC* trả về "đồng hồ treo tường" giờ VN.
-export function nowVN(env: any): Date {
+export function nowVN(env: TzEnv): Date {
   return new Date(Date.now() + offsetMin(env) * 60000);
 }
 
@@ -54,7 +56,7 @@ export function ymd(iso: string, min: number): string | null {
 }
 
 // Mô tả "bây giờ" cho prompt AI (kèm thứ trong tuần).
-export function vnNowDescription(env: any): string {
+export function vnNowDescription(env: TzEnv): string {
   const d = nowVN(env);
   return `${DOW[d.getUTCDay()]}, ${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
@@ -148,7 +150,7 @@ export function hhmmVN(iso: string, min: number): string | null {
 }
 
 // Lần xảy ra kế tiếp của mốc "HH:MM" hằng ngày (giờ VN), luôn ở tương lai.
-export function nextDailyISO(time: string, env: any): string {
+export function nextDailyISO(time: string, env: TzEnv): string {
   const [h, mi] = time.split(":").map(Number);
   const min = offsetMin(env);
   const n = nowVN(env);
@@ -158,7 +160,7 @@ export function nextDailyISO(time: string, env: any): string {
 }
 
 // Lần xảy ra kế tiếp của (thứ trong tuần, HH:MM) theo giờ VN, luôn ở tương lai.
-export function nextWeeklyISO(dow: number, time: string, env: any): string {
+export function nextWeeklyISO(dow: number, time: string, env: TzEnv): string {
   const [h, mi] = time.split(":").map(Number);
   const min = offsetMin(env);
   const n = nowVN(env);
@@ -187,7 +189,7 @@ export function dowNameVN(d: number): string {
 
 // "3 phút nữa", "2 tiếng nữa", "1 ngày sau" -> mốc tương lai + text đã gỡ cụm thời gian.
 // Trả null nếu không khớp.
-export function parseRelative(text: string, env: any): { dueISO: string; text: string } | null {
+export function parseRelative(text: string, env: TzEnv): { dueISO: string; text: string } | null {
   const m = text.match(/(\d+)\s*(phút|phut|p|tiếng|tieng|giờ|gio|g|h|ngày|ngay)\s*(nữa|nua|sau|tới|toi)/i);
   if (!m) return null;
   const n = parseInt(m[1], 10);

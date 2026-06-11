@@ -12,3 +12,7 @@ TELEGRAM_WEBHOOK_SECRET=doi-thanh-chuoi-ngau-nhien-that-dai
 # Tạo token: https://id.atlassian.com/manage-profile/security/api-tokens
 JIRA_EMAIL=ban@email.com
 JIRA_API_TOKEN=your_atlassian_api_token
+
+# Chuỗi ngẫu nhiên dài tự đặt; xác thực webhook Jira -> Worker (?s=... trên URL).
+# Tạo nhanh:  openssl rand -hex 32
+JIRA_WEBHOOK_SECRET=doi-thanh-chuoi-ngau-nhien-khac

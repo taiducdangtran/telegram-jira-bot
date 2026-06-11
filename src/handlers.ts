@@ -1,14 +1,22 @@
-// Bộ não của bot: định tuyến message/command/callback, tạo issue, nhắc một-lần & nhắc-lặp.
+// Router của bot: định tuyến message/command, hiểu câu tự nhiên, nhắc lặp.
+// Thao tác task -> tasks.ts · nút bấm -> callbacks.ts · cron -> cron.ts · KV -> store.ts.
 
-import { tg, escapeHtml as esc, taskButtons, recurButtons } from "./telegram";
+import { tg, escapeHtml as esc, recurButtons } from "./telegram";
 import { jira } from "./jira";
 import { parseTask } from "./ai";
 import {
-  offsetMin, nowVN, parseDueStrict, formatVN, ymd, isoFromMs, msFromVN,
+  offsetMin, nowVN, parseDueStrict, formatVN,
   hhmmVN, nextDailyISO, nextWeeklyISO, parseDow, dowNameVN, parseRelative,
 } from "./time";
-
-const p2 = (n: number) => String(n).padStart(2, "0");
+import { p2, extractLabels, detectPriority, extractIssueKey, looksLikeQuery, looksLikeGreeting, parseClock, validateProjectKey } from "./util";
+import { isAllowed, loadByPrefix, rememberOwnerChat, bumpSchedule } from "./store";
+import {
+  createTask, listUpcoming, listPending, applyAssign, applyDue, applyPriority,
+  transitionDone, deleteTask,
+} from "./tasks";
+import { onCallback } from "./callbacks";
+import { teamCommand } from "./team";
+import type { Env, RecurRecord } from "./types";
 
 const HELP = `🤖 <b>Bot quản lý việc → Jira</b>
 
@@ -35,76 +43,38 @@ const HELP = `🤖 <b>Bot quản lý việc → Jira</b>
 <b>↩️ Reply vào 1 task = sửa task đó</b>
 "3p nữa" / "mai 9h" → đặt nhắc · "giao cho Tú" → giao · "ưu tiên cao" · "xong" · "xoá" · câu khác → thêm ghi chú.
 
+<b>Đội 👥</b>
+• /team add &lt;tên&gt; &lt;chatId&gt; · /team list · /team del &lt;tên&gt;
+  Ai trong đội được giao việc (qua /assign, "giao cho Tú", hay trên Jira) → bot DM người đó.
+
 <b>Cài đặt</b>
 • /projects · /useproject &lt;KEY&gt; · /whoami`;
 
-const DONE_RE = /done|hoàn thành|resolved|complete|đã xong|closed|xong|finish/i;
 const DONE_WORD_RE = /^(xong|done|hoàn thành|đã xong|hoàn tất|ok xong)\b/i;
 const DELETE_WORD_RE = /(xoá|xóa|huỷ|hủy|delete|remove|gỡ task|gỡ việc)/i;
 
-function isAllowed(chatId: number | string, env: any): boolean {
-  const raw = (env.ALLOWED_CHAT_IDS || "").trim();
-  if (!raw) return false; // chưa cấu hình -> KHOÁ (fail-closed); đặt ALLOWED_CHAT_IDS để mở
-  return raw.split(",").map((s: string) => s.trim()).filter(Boolean).includes(String(chatId));
-}
-
-async function getProjectKey(env: any): Promise<string> {
-  return (await env.BOT_KV.get("config:project_key")) || env.JIRA_PROJECT_KEY || "";
-}
-
-function safeParse(s: string): any | null {
-  try { return JSON.parse(s); } catch { return null; }
-}
-
-// #hashtag -> labels (Jira label không có dấu cách); trả về text đã gỡ tag.
-function extractLabels(text: string): { labels: string[]; text: string } {
-  const labels: string[] = [];
-  const cleaned = String(text).replace(/(^|\s)#([\p{L}\d_]{1,50})/gu, (_m, sp, tag) => {
-    labels.push(tag);
-    return sp;
-  });
-  return { labels, text: cleaned.replace(/\s+/g, " ").trim() };
-}
-
-// Đoán priority từ từ khoá tiếng Việt (dùng cho /note; đường AI tự đoán riêng).
-function detectPriority(text: string): string | null {
-  const t = String(text).toLowerCase();
-  if (/khẩn cấp|rất gấp|cực gấp|gấp lắm|urgent|asap/.test(t)) return "Highest";
-  if (/\bgấp\b|khẩn|ưu tiên cao|quan trọng/.test(t)) return "High";
-  if (/ưu tiên thấp|không gấp|thong thả|từ từ|lúc nào cũng được/.test(t)) return "Low";
-  return null;
-}
-
-function extractIssueKey(text: string | undefined): string | null {
-  if (!text) return null;
-  const m = String(text).match(/\b([A-Z][A-Z0-9]+-\d+)\b/);
-  return m ? m[1] : null;
-}
-
-// Câu hỏi/tra cứu việc ("có task nào tồn đọng không?") -> nên LIỆT KÊ, không tạo task.
-function looksLikeQuery(text: string): boolean {
-  const t = text.toLowerCase().trim();
-  if (/^(tạo|thêm|ghi|nhắc|add|new)\b/.test(t)) return false; // rõ ràng là tạo việc
-  const taskWord = /(task|việc|cần làm|tồn đọng|chưa (làm|xong|hoàn)|đang làm|deadline|hạn chót|to-?do|đầu việc)/.test(t);
-  const question =
-    /\?\s*$/.test(t) ||
-    /(không|chưa)\s*\??$/.test(t) ||
-    /^(có |còn |bao nhiêu|mấy |liệt kê|xem |cho .*xem|thống kê|danh sách|list\b|show\b)/.test(t);
-  return taskWord && question;
-}
-
-// Chào hỏi / xác nhận ngắn -> không phải task.
-function looksLikeGreeting(text: string): boolean {
-  const t = text.trim();
-  return t.length <= 20 && /^(hi|hello|hey|chào|chao|alo|ok|oke|okê|okay|cảm ơn|cám ơn|thanks?|tks|ừ|uh|ờ|vâng|dạ|yes|yeah)\b/i.test(t);
-}
-
 // ---- Định tuyến update ----
 
-export async function onUpdate(update: any, env: any): Promise<void> {
+export async function onUpdate(update: any, env: Env): Promise<void> {
+  // Telegram có thể retry cùng một update (timeout/mạng) -> dedup theo update_id
+  // để không tạo issue trùng. check-then-set không atomic, nhưng retry của Telegram
+  // cách nhau vài giây và thường vào cùng colo (read-your-writes) — đủ chắc.
+  // CHỈ dedup cho chat trong allowlist: người lạ nhắn bot không được đốt quota
+  // write KV (~1k/ngày). Câu từ chối có gửi trùng khi Telegram retry cũng vô hại.
+  const preChatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
+  if (update.update_id != null && isAllowed(preChatId, env)) {
+    const dupKey = `processed:upd:${update.update_id}`;
+    if (await env.BOT_KV.get(dupKey)) {
+      console.log("duplicate update, skipped", update.update_id);
+      return;
+    }
+    await env.BOT_KV.put(dupKey, "1", { expirationTtl: 600 });
+  }
+
   if (update.callback_query) return onCallback(update.callback_query, env);
 
-  const msg = update.message || update.edited_message;
+  // Tin nhắn bị SỬA (edited_message) bỏ qua — xử lý lại sẽ tạo task trùng.
+  const msg = update.message;
   if (!msg) return;
   const chatId = msg.chat.id;
 
@@ -127,13 +97,13 @@ export async function onUpdate(update: any, env: any): Promise<void> {
       chatId,
       unset
         ? `🔒 Bot chưa cấu hình quyền dùng. Chat ID của bạn: <code>${chatId}</code>\nĐặt <code>ALLOWED_CHAT_IDS="${chatId}"</code> trong wrangler.jsonc rồi deploy lại.`
-        : "⛔ Bạn không có quyền dùng bot này.",
+        : `⛔ Bạn không có quyền dùng bot này.\nChat ID của bạn: <code>${chatId}</code> — gửi cho admin nếu bạn cần NHẬN thông báo giao việc (admin gõ /team add).`,
     );
     return;
   }
 
   // Nhớ chat gần nhất để cron có chỗ gửi nhắc (fallback khi record thiếu chatId).
-  await env.BOT_KV.put("config:owner_chat", String(chatId));
+  await rememberOwnerChat(env, chatId);
 
   const text = msg.text.trim();
   if (!text) {
@@ -144,7 +114,7 @@ export async function onUpdate(update: any, env: any): Promise<void> {
   return onNaturalText(text, chatId, env, msg);
 }
 
-async function onCommand(text: string, chatId: number, env: any, msg: any): Promise<void> {
+async function onCommand(text: string, chatId: number, env: Env, msg: any): Promise<void> {
   const sp = text.indexOf(" ");
   const cmd = (sp < 0 ? text : text.slice(0, sp)).toLowerCase().replace(/@.*$/, ""); // bỏ @tên_bot trong group
   const arg = sp < 0 ? "" : text.slice(sp + 1).trim();
@@ -172,6 +142,8 @@ async function onCommand(text: string, chatId: number, env: any, msg: any): Prom
       return listPending(chatId, env);
     case "/assign":
       return assignCommand(arg, chatId, env);
+    case "/team":
+      return teamCommand(arg, chatId, env);
     case "/due":
       return dueCommand(arg, chatId, env);
     case "/prio":
@@ -204,7 +176,7 @@ async function onCommand(text: string, chatId: number, env: any, msg: any): Prom
 
 // ---- Project setup ----
 
-async function listProjects(chatId: number, env: any): Promise<void> {
+async function listProjects(chatId: number, env: Env): Promise<void> {
   try {
     const ps = await jira.projects(env);
     if (!ps.length) {
@@ -220,10 +192,15 @@ async function listProjects(chatId: number, env: any): Promise<void> {
   }
 }
 
-async function useProject(arg: string, chatId: number, env: any): Promise<void> {
+async function useProject(arg: string, chatId: number, env: Env): Promise<void> {
   const key = arg.trim().toUpperCase();
   if (!key) {
     await tg.sendMessage(env, chatId, "Cú pháp: /useproject KEY  (vd /useproject KAN)");
+    return;
+  }
+  // Chặn key sai dạng trước khi gọi API / nội suy vào JQL (phòng thủ thêm).
+  if (!validateProjectKey(key)) {
+    await tg.sendMessage(env, chatId, `Key <b>${esc(key)}</b> không hợp lệ (chữ hoa + số, vd KAN). Gõ /projects để xem danh sách.`);
     return;
   }
   const p = await jira.getProject(env, key);
@@ -237,7 +214,7 @@ async function useProject(arg: string, chatId: number, env: any): Promise<void> 
 
 // ---- Tạo issue (một-lần) ----
 
-async function noteCommand(arg: string, chatId: number, env: any): Promise<void> {
+async function noteCommand(arg: string, chatId: number, env: Env): Promise<void> {
   if (!arg) {
     await tg.sendMessage(env, chatId, "Cú pháp: /note &lt;việc&gt; [// &lt;thời gian&gt;]");
     return;
@@ -261,7 +238,7 @@ async function noteCommand(arg: string, chatId: number, env: any): Promise<void>
   await createTask(env, chatId, text, dueISO, warn, { priority, labels });
 }
 
-async function onNaturalText(text: string, chatId: number, env: any, msg: any): Promise<void> {
+async function onNaturalText(text: string, chatId: number, env: Env, msg: any): Promise<void> {
   // 1. Reply vào tin có mã việc -> thao tác TRÊN task đó (đặt nhắc/đổi hạn/giao/ưu tiên/done/xoá/ghi chú).
   const replyKey = extractIssueKey(msg?.reply_to_message?.text);
   if (replyKey) return handleReplyToTask(text, chatId, env, replyKey);
@@ -306,281 +283,15 @@ async function onNaturalText(text: string, chatId: number, env: any, msg: any): 
 
   const dueISO = rel?.dueISO || parsed.dueISO;
   const priority = parsed.priority || detectPriority(text);
-  await createTask(env, chatId, parsed.title, dueISO, "", { priority, labels });
-}
-
-async function createTask(
-  env: any,
-  chatId: number,
-  title: string,
-  dueISO: string | null,
-  warn: string,
-  opts: { priority?: string | null; labels?: string[] } = {},
-): Promise<void> {
-  const projectKey = await getProjectKey(env);
-  if (!projectKey) {
-    await tg.sendMessage(env, chatId, "⚠️ Chưa chọn project Jira. Gõ /projects rồi /useproject KEY.");
-    return;
-  }
-  // Jira summary tối đa 255 ký tự; gọn khoảng trắng + cắt để không bị Jira 400.
-  title = String(title).replace(/\s+/g, " ").trim().slice(0, 250);
-  if (!title) {
-    await tg.sendMessage(env, chatId, "Thiếu nội dung việc.");
-    return;
-  }
-  const priority = opts.priority || null;
-  const labels = (opts.labels || []).slice(0, 10);
-
-  try {
-    const dueYMD = dueISO ? ymd(dueISO, offsetMin(env)) : null;
-    const dropped: string[] = [];
-    let issue: any;
-    try {
-      issue = await jira.createIssue(env, projectKey, title, dueYMD, { priority, labels });
-    } catch (e: any) {
-      // Project next-gen có thể không bật field priority/labels -> bỏ field lỗi rồi thử lại 1 lần.
-      if ((priority || labels.length) && /priority|labels/i.test(e.message || "")) {
-        const keepPriority = !/priority/i.test(e.message);
-        const keepLabels = !/labels/i.test(e.message);
-        if (!keepPriority && priority) dropped.push("priority");
-        if (!keepLabels && labels.length) dropped.push("nhãn");
-        issue = await jira.createIssue(env, projectKey, title, dueYMD, {
-          priority: keepPriority ? priority : null,
-          labels: keepLabels ? labels : [],
-        });
-      } else {
-        throw e;
-      }
-    }
-
-    const url = jira.issueUrl(env, issue.key);
-    let head = `✅ Đã tạo: <b>${esc(title)}</b>\n🔖 ${esc(issue.key)}`;
-    if (priority && !dropped.includes("priority")) head += ` • ⚑ ${esc(priority)}`;
-    if (labels.length && !dropped.includes("nhãn")) head += ` • 🏷 ${esc(labels.join(", "))}`;
-
-    let extra: Record<string, unknown> = {};
-    if (dueISO) {
-      head += `\n⏰ Hạn: ${esc(formatVN(dueISO, offsetMin(env)))} — mình sẽ nhắc bạn.`;
-      await env.BOT_KV.put(
-        `due:${issue.key}`,
-        JSON.stringify({ issueKey: issue.key, dueISO, chatId, summary: title, url, fired: false }),
-      );
-      extra = { reply_markup: taskButtons(issue.key) };
-    }
-    if (dropped.length) warn = (warn || "") + `\n⚠️ Project không hỗ trợ ${dropped.join(" & ")}, đã bỏ qua.`;
-    head += `\n🔗 ${esc(url)}${warn || ""}`;
-    await tg.sendMessage(env, chatId, head, extra);
-  } catch (e: any) {
-    let hint = "";
-    if (/issue\s*type|issuetype/i.test(e.message || "")) {
-      const p = await jira.getProject(env, projectKey).catch(() => null);
-      const types = (p?.issueTypes || []).map((t: any) => t.name).filter(Boolean);
-      if (types.length) {
-        hint = `\n\nLoại issue hợp lệ của project: ${esc(types.join(", "))}.\nSửa <code>JIRA_ISSUE_TYPE</code> trong wrangler.jsonc cho khớp rồi deploy lại.`;
-      }
-    }
-    await tg.sendMessage(env, chatId, `❌ Lỗi tạo issue Jira:\n<code>${esc(e.message).slice(0, 500)}</code>${hint}`);
-  }
-}
-
-async function listUpcoming(chatId: number, env: any): Promise<void> {
-  const recs = await loadByPrefix(env, "due:");
-  const pending = recs.filter((r) => !r.fired);
-  if (!pending.length) {
-    await tg.sendMessage(env, chatId, "Hiện chưa có việc nào đang chờ nhắc.");
-    return;
-  }
-  pending.sort((a, b) => Date.parse(a.dueISO) - Date.parse(b.dueISO));
-  const shown = pending.slice(0, 15);
-  const lines = shown
-    .map((r) => `• <b>${esc(r.summary.slice(0, 80))}</b>\n  ⏰ ${esc(formatVN(r.dueISO, offsetMin(env)))} • ${esc(r.issueKey)}`)
-    .join("\n");
-  const more = pending.length > shown.length ? `\n… và ${pending.length - shown.length} việc khác.` : "";
-  await tg.sendMessage(env, chatId, `🗓 Việc sắp tới:\n${lines}${more}`);
-}
-
-// ---- Tra cứu (query) & sửa task cũ ----
-
-async function listPending(chatId: number, env: any): Promise<void> {
-  const projectKey = await getProjectKey(env);
-  if (!projectKey) {
-    await tg.sendMessage(env, chatId, "⚠️ Chưa chọn project Jira. Gõ /projects rồi /useproject KEY.");
-    return;
-  }
-  try {
-    const jql = `project = "${projectKey}" AND statusCategory != Done ORDER BY duedate ASC, created DESC`;
-    const issues = await jira.searchJQL(env, jql, ["summary", "status", "assignee", "duedate", "priority"], 20);
-    if (!issues.length) {
-      await tg.sendMessage(env, chatId, "🎉 Không có task nào đang tồn đọng.");
-      return;
-    }
-    const lines = issues
-      .map((i: any) => {
-        const f = i.fields || {};
-        const who = f.assignee?.displayName ? `👤 ${esc(f.assignee.displayName)}` : "👤 chưa giao";
-        const due = f.duedate ? ` · ⏰ ${esc(f.duedate)}` : "";
-        const prio = f.priority?.name && f.priority.name !== "Medium" ? ` · ⚑ ${esc(f.priority.name)}` : "";
-        return `• <b>${esc(i.key)}</b> — ${esc(String(f.summary || "").slice(0, 60))}\n  ${esc(f.status?.name || "?")} · ${who}${due}${prio}`;
-      })
-      .join("\n");
-    await tg.sendMessage(
-      env,
-      chatId,
-      `📋 <b>Task tồn đọng</b> (${issues.length}):\n${lines}\n\n<i>Sửa:</i> /assign KEY ai · /due KEY giờ · /prio KEY mức · /done KEY`,
-    );
-  } catch (e: any) {
-    await tg.sendMessage(env, chatId, `❌ Lỗi tra task:\n<code>${esc(e.message).slice(0, 400)}</code>`);
-  }
-}
-
-async function assignCommand(arg: string, chatId: number, env: any): Promise<void> {
-  const key = extractIssueKey(arg);
-  const who = key ? arg.replace(key, "").trim() : "";
-  if (!key || !who) {
-    await tg.sendMessage(env, chatId, "Cú pháp: /assign KAN-12 me  (hoặc /assign KAN-12 &lt;tên&gt;)");
-    return;
-  }
-  await applyAssign(env, chatId, key, who);
-}
-
-// Giao 1 issue cho "me" hoặc người tìm theo tên.
-async function applyAssign(env: any, chatId: number, key: string, who: string): Promise<void> {
-  try {
-    let accountId: string, name: string;
-    if (/^(me|tôi|toi|mình|minh|tui|t|bản thân)$/i.test(who)) {
-      const m = await jira.myself(env);
-      accountId = m.accountId;
-      name = m.displayName || "bạn";
-    } else {
-      const us = await jira.searchAssignable(env, await getProjectKey(env), who);
-      if (!us.length) {
-        await tg.sendMessage(env, chatId, `Không tìm thấy ai tên "${esc(who)}". Thử giao cho bạn: <code>/assign ${esc(key)} me</code>.`);
-        return;
-      }
-      accountId = us[0].accountId;
-      name = us[0].displayName;
-    }
-    await jira.assign(env, key, accountId);
-    await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(name)}.`);
-  } catch (e: any) {
-    await tg.sendMessage(env, chatId, `❌ Lỗi giao việc:\n<code>${esc(e.message).slice(0, 300)}</code>`);
-  }
-}
-
-async function dueCommand(arg: string, chatId: number, env: any): Promise<void> {
-  const key = extractIssueKey(arg);
-  const dstr = key ? arg.replace(key, "").trim() : "";
-  if (!key || !dstr) {
-    await tg.sendMessage(env, chatId, "Cú pháp: /due KAN-12 &lt;thời gian&gt;\nvd: <code>/due KAN-12 12/06 15:00</code> hoặc <code>/due KAN-12 30 phút nữa</code>");
-    return;
-  }
-  const rel = parseRelative(dstr, env);
-  const dueISO = rel?.dueISO || parseDueStrict(dstr, offsetMin(env), nowVN(env));
-  if (!dueISO) {
-    await tg.sendMessage(env, chatId, "Không hiểu thời gian. vd: 12/06 15:00, 9h30, hoặc '30 phút nữa'.");
-    return;
-  }
-  await applyDue(env, chatId, key, dueISO);
-}
-
-// Đặt/đổi hạn cho 1 issue + bật nhắc trong KV.
-async function applyDue(env: any, chatId: number, key: string, dueISO: string): Promise<void> {
-  try {
-    const y = ymd(dueISO, offsetMin(env));
-    if (y) await jira.setDueDate(env, key, y);
-    let summary = key;
-    try {
-      summary = (await jira.getIssueFields(env, key, ["summary"]))?.fields?.summary || key;
-    } catch {
-      /* không lấy được summary thì dùng key */
-    }
-    await env.BOT_KV.put(
-      `due:${key}`,
-      JSON.stringify({ issueKey: key, dueISO, chatId, summary, url: jira.issueUrl(env, key), fired: false }),
-    );
-    await tg.sendMessage(
-      env,
-      chatId,
-      `⏰ Đã đặt nhắc <b>${esc(key)}</b>: ${esc(formatVN(dueISO, offsetMin(env)))} — ${esc(String(summary).slice(0, 50))}.`,
-      { reply_markup: taskButtons(key) },
-    );
-  } catch (e: any) {
-    await tg.sendMessage(env, chatId, `❌ Lỗi đặt hạn:\n<code>${esc(e.message).slice(0, 300)}</code>`);
-  }
-}
-
-// Thứ tự QUAN TRỌNG: cụm dài/đặc thù trước cụm ngắn (cho nhánh includes phía dưới).
-const PRIO_MAP: [string, string][] = [
-  ["khẩn cấp", "Highest"], ["rất cao", "Highest"], ["cao nhất", "Highest"], ["highest", "Highest"],
-  ["gấp", "High"], ["khẩn", "High"], ["cao", "High"], ["high", "High"],
-  ["trung bình", "Medium"], ["tb", "Medium"], ["vừa", "Medium"], ["medium", "Medium"],
-  ["thấp nhất", "Lowest"], ["lowest", "Lowest"],
-  ["thấp", "Low"], ["low", "Low"],
-];
-
-async function prioCommand(arg: string, chatId: number, env: any): Promise<void> {
-  const key = extractIssueKey(arg);
-  const raw = key ? arg.replace(key, "").trim().toLowerCase() : "";
-  if (!key || !raw) {
-    await tg.sendMessage(env, chatId, "Cú pháp: /prio KAN-12 &lt;cao nhất|cao|trung bình|thấp|thấp nhất&gt;");
-    return;
-  }
-  await applyPriority(env, chatId, key, raw);
-}
-
-// Đặt độ ưu tiên cho 1 issue theo từ khoá tiếng Việt/English.
-async function applyPriority(env: any, chatId: number, key: string, raw: string): Promise<void> {
-  const hit = PRIO_MAP.find(([k]) => k === raw) || PRIO_MAP.find(([k]) => raw.includes(k));
-  if (!hit) {
-    await tg.sendMessage(env, chatId, "Mức ưu tiên: cao nhất / cao / trung bình / thấp / thấp nhất.");
-    return;
-  }
-  try {
-    await jira.setPriority(env, key, hit[1]);
-    await tg.sendMessage(env, chatId, `✅ <b>${esc(key)}</b> priority → ${esc(hit[1])}.`);
-  } catch (e: any) {
-    await tg.sendMessage(env, chatId, `❌ Lỗi đặt priority (project có thể không bật field này):\n<code>${esc(e.message).slice(0, 300)}</code>`);
-  }
-}
-
-// ---- Hoàn thành ----
-
-// Chuyển issue sang trạng thái Done; trả về tên trạng thái, hoặc false nếu không có.
-async function transitionDone(env: any, chatId: number, issueKey: string): Promise<string | false> {
-  const trs = await jira.transitions(env, issueKey);
-  const t = trs.find((x: any) => DONE_RE.test(x.name));
-  if (!t) {
-    await tg.sendMessage(
-      env,
-      chatId,
-      `Project chưa có trạng thái kiểu "Done". Các trạng thái chuyển được: ${esc(trs.map((x: any) => x.name).join(", ")) || "(không có)"}`,
-    );
-    return false;
-  }
-  await jira.transition(env, issueKey, t.id);
-  await env.BOT_KV.delete(`due:${issueKey}`);
-  return t.name;
-}
-
-// Xoá hẳn issue khỏi Jira (vĩnh viễn) + gỡ nhắc liên quan.
-async function deleteTask(env: any, chatId: number, key: string): Promise<void> {
-  try {
-    let summary = key;
-    try {
-      summary = (await jira.getIssueFields(env, key, ["summary"]))?.fields?.summary || key;
-    } catch {
-      /* lấy được summary thì hay, không thì thôi */
-    }
-    await jira.deleteIssue(env, key);
-    await env.BOT_KV.delete(`due:${key}`);
-    await tg.sendMessage(env, chatId, `🗑️ Đã xoá <b>${esc(key)}</b> — ${esc(String(summary).slice(0, 60))}.`);
-  } catch (e: any) {
-    await tg.sendMessage(env, chatId, `❌ Lỗi xoá ${esc(key)} (cần quyền Delete issue):\n<code>${esc(e.message).slice(0, 300)}</code>`);
-  }
+  // AI lỗi/không trả JSON -> đã lưu nguyên văn; báo để user biết mà tự đặt hạn.
+  const warn = parsed.aiFallback
+    ? "\n⚠️ AI không phân tích được câu này — đã lưu nguyên văn làm tiêu đề. Cần hạn giờ thì dùng /note <việc> // <giờ>."
+    : "";
+  await createTask(env, chatId, parsed.title, dueISO, warn, { priority, labels });
 }
 
 // Reply vào tin có mã việc = THAO TÁC trên task đó (không tạo task mới).
-async function handleReplyToTask(text: string, chatId: number, env: any, key: string): Promise<void> {
+async function handleReplyToTask(text: string, chatId: number, env: Env, key: string): Promise<void> {
   // Hoàn thành
   if (DONE_WORD_RE.test(text)) {
     const name = await transitionDone(env, chatId, key);
@@ -616,7 +327,45 @@ async function handleReplyToTask(text: string, chatId: number, env: any, key: st
   }
 }
 
-async function doneCommand(arg: string, chatId: number, env: any, msg: any): Promise<void> {
+// ---- Lệnh sửa task ----
+
+async function assignCommand(arg: string, chatId: number, env: Env): Promise<void> {
+  const key = extractIssueKey(arg);
+  const who = key ? arg.replace(key, "").trim() : "";
+  if (!key || !who) {
+    await tg.sendMessage(env, chatId, "Cú pháp: /assign KAN-12 me  (hoặc /assign KAN-12 &lt;tên&gt;)");
+    return;
+  }
+  await applyAssign(env, chatId, key, who);
+}
+
+async function dueCommand(arg: string, chatId: number, env: Env): Promise<void> {
+  const key = extractIssueKey(arg);
+  const dstr = key ? arg.replace(key, "").trim() : "";
+  if (!key || !dstr) {
+    await tg.sendMessage(env, chatId, "Cú pháp: /due KAN-12 &lt;thời gian&gt;\nvd: <code>/due KAN-12 12/06 15:00</code> hoặc <code>/due KAN-12 30 phút nữa</code>");
+    return;
+  }
+  const rel = parseRelative(dstr, env);
+  const dueISO = rel?.dueISO || parseDueStrict(dstr, offsetMin(env), nowVN(env));
+  if (!dueISO) {
+    await tg.sendMessage(env, chatId, "Không hiểu thời gian. vd: 12/06 15:00, 9h30, hoặc '30 phút nữa'.");
+    return;
+  }
+  await applyDue(env, chatId, key, dueISO);
+}
+
+async function prioCommand(arg: string, chatId: number, env: Env): Promise<void> {
+  const key = extractIssueKey(arg);
+  const raw = key ? arg.replace(key, "").trim().toLowerCase() : "";
+  if (!key || !raw) {
+    await tg.sendMessage(env, chatId, "Cú pháp: /prio KAN-12 &lt;cao nhất|cao|trung bình|thấp|thấp nhất&gt;");
+    return;
+  }
+  await applyPriority(env, chatId, key, raw);
+}
+
+async function doneCommand(arg: string, chatId: number, env: Env, msg: any): Promise<void> {
   const key = extractIssueKey(arg) || extractIssueKey(msg?.reply_to_message?.text);
   if (!key) {
     await tg.sendMessage(env, chatId, "Reply vào tin có mã việc rồi gõ /done, hoặc /done KAN-12.");
@@ -629,7 +378,7 @@ async function doneCommand(arg: string, chatId: number, env: any, msg: any): Pro
 // ---- Nhắc lặp (recurring) ----
 
 async function createRecur(
-  env: any,
+  env: Env,
   chatId: number,
   spec: { kind: "daily" | "weekly"; time: string; text: string; dow?: number },
 ): Promise<void> {
@@ -640,9 +389,10 @@ async function createRecur(
   }
   const id = Date.now().toString(36);
   const nextISO = spec.kind === "daily" ? nextDailyISO(spec.time, env) : nextWeeklyISO(spec.dow!, spec.time, env);
-  const rec: any = { id, kind: spec.kind, time: spec.time, text, chatId, nextISO };
+  const rec: RecurRecord = { id, kind: spec.kind, time: spec.time, text, chatId, nextISO };
   if (spec.kind === "weekly") rec.dow = spec.dow;
   await env.BOT_KV.put(`recur:${id}`, JSON.stringify(rec));
+  await bumpSchedule(env); // lịch mới -> cron tick sau quét ngay
 
   const when = spec.kind === "daily" ? `mỗi ngày ${spec.time}` : `mỗi ${dowNameVN(spec.dow!)} lúc ${spec.time}`;
   await tg.sendMessage(
@@ -653,17 +403,7 @@ async function createRecur(
   );
 }
 
-// "8:00" | "08:00" | "8h" | "8h30" -> [h, m] hợp lệ, hoặc null.
-function parseClock(tok: string): [number, number] | null {
-  const m = tok.match(/^(\d{1,2})(?::|h|g)(\d{2})?$/i);
-  if (!m) return null;
-  const h = +m[1];
-  const mi = m[2] ? +m[2] : 0;
-  if (h > 23 || mi > 59) return null;
-  return [h, mi];
-}
-
-async function dailyCommand(arg: string, chatId: number, env: any): Promise<void> {
+async function dailyCommand(arg: string, chatId: number, env: Env): Promise<void> {
   const sp = arg.indexOf(" ");
   const clock = sp < 0 ? null : parseClock(arg.slice(0, sp));
   const rest = sp < 0 ? "" : arg.slice(sp + 1).trim();
@@ -675,7 +415,7 @@ async function dailyCommand(arg: string, chatId: number, env: any): Promise<void
   await createRecur(env, chatId, { kind: "daily", time: `${p2(clock[0])}:${p2(clock[1])}`, text });
 }
 
-async function weeklyCommand(arg: string, chatId: number, env: any): Promise<void> {
+async function weeklyCommand(arg: string, chatId: number, env: Env): Promise<void> {
   const parts = arg.split(/\s+/);
   const dow = parts[0] != null ? parseDow(parts[0]) : null;
   const clock = parts[1] != null ? parseClock(parts[1]) : null;
@@ -688,22 +428,22 @@ async function weeklyCommand(arg: string, chatId: number, env: any): Promise<voi
   await createRecur(env, chatId, { kind: "weekly", dow, time: `${p2(clock[0])}:${p2(clock[1])}`, text });
 }
 
-async function listRecurring(chatId: number, env: any): Promise<void> {
-  const recs = await loadByPrefix(env, "recur:");
+async function listRecurring(chatId: number, env: Env): Promise<void> {
+  const recs = await loadByPrefix<RecurRecord>(env, "recur:");
   if (!recs.length) {
     await tg.sendMessage(env, chatId, "Chưa có nhắc lặp nào. Tạo: <code>/daily 08:00 &lt;việc&gt;</code>");
     return;
   }
   const lines = recs
     .map((r) => {
-      const when = r.kind === "daily" ? `mỗi ngày ${r.time}` : `mỗi ${dowNameVN(r.dow)} ${r.time}`;
+      const when = r.kind === "daily" ? `mỗi ngày ${r.time}` : `mỗi ${dowNameVN(r.dow!)} ${r.time}`;
       return `• <b>${esc(r.text)}</b>\n  🔁 ${when} • gỡ: <code>/stoprecur ${esc(r.id)}</code>`;
     })
     .join("\n");
   await tg.sendMessage(env, chatId, `🔁 Nhắc lặp:\n${lines}`);
 }
 
-async function stopRecurCommand(arg: string, chatId: number, env: any): Promise<void> {
+async function stopRecurCommand(arg: string, chatId: number, env: Env): Promise<void> {
   const id = arg.trim();
   if (!id) {
     await tg.sendMessage(env, chatId, "Cú pháp: /stoprecur &lt;id&gt; (xem id bằng /recurring).");
@@ -716,183 +456,4 @@ async function stopRecurCommand(arg: string, chatId: number, env: any): Promise<
   }
   await env.BOT_KV.delete(`recur:${id}`);
   await tg.sendMessage(env, chatId, `✅ Đã gỡ nhắc lặp <code>${esc(id)}</code>.`);
-}
-
-// ---- Nút bấm (callback_query) ----
-
-async function onCallback(cq: any, env: any): Promise<void> {
-  const data: string = cq.data || "";
-  const chatId = cq.message?.chat?.id;
-  const messageId = cq.message?.message_id;
-
-  // Nút bấm cũng phải qua allowlist (đường này KHÔNG đi qua isAllowed của onUpdate).
-  if (!isAllowed(chatId, env)) {
-    await tg.answerCallback(env, cq.id, "⛔ Không có quyền.");
-    return;
-  }
-
-  const [action, idOrKey, extraArg] = data.split(":");
-
-  try {
-    if (action === "rstop") {
-      await env.BOT_KV.delete(`recur:${idOrKey}`);
-      await tg.answerCallback(env, cq.id, "✖ Đã dừng nhắc lặp.");
-      if (chatId && messageId) {
-        await tg.editText(env, chatId, messageId, "✖ <b>Đã dừng nhắc lặp.</b>", { reply_markup: { inline_keyboard: [] } });
-      }
-      return;
-    }
-
-    if (action === "done") {
-      const cur = await env.BOT_KV.get(`due:${idOrKey}`);
-      const rec = cur ? safeParse(cur) : null;
-      const name = await transitionDone(env, chatId, idOrKey);
-      if (!name) {
-        await tg.answerCallback(env, cq.id, "Không thấy trạng thái Done.");
-        return;
-      }
-      await tg.answerCallback(env, cq.id, `✅ ${idOrKey} → ${name}`);
-      if (chatId && messageId) {
-        const label = rec?.summary ? esc(rec.summary) : esc(idOrKey);
-        await tg.editText(
-          env,
-          chatId,
-          messageId,
-          `✅ <b>Đã hoàn thành:</b> ${label}\n🔖 ${esc(idOrKey)} → ${esc(name)}`,
-          { reply_markup: { inline_keyboard: [] } },
-        );
-      }
-      return;
-    }
-
-    if (action === "snooze" || action === "snmorn") {
-      // Chỉ hoãn việc CÒN trong danh sách nhắc — không tự dựng lại record cho việc đã xong/đã xoá.
-      const cur = await env.BOT_KV.get(`due:${idOrKey}`);
-      const rec = cur ? safeParse(cur) : null;
-      if (!rec) {
-        await tg.answerCallback(env, cq.id, "Việc này không còn trong danh sách nhắc.");
-        return;
-      }
-
-      let newISO: string;
-      if (action === "snooze") {
-        let mins = parseInt(extraArg || "60", 10);
-        if (!Number.isFinite(mins) || mins <= 0) mins = 60;
-        newISO = isoFromMs(Date.now() + mins * 60000, offsetMin(env));
-      } else {
-        const n = nowVN(env);
-        const ms = msFromVN(n.getUTCFullYear(), n.getUTCMonth() + 1, n.getUTCDate(), 9, 0, offsetMin(env)) + 86400000;
-        newISO = isoFromMs(ms, offsetMin(env));
-      }
-
-      rec.dueISO = newISO;
-      rec.fired = false;
-      await env.BOT_KV.put(`due:${idOrKey}`, JSON.stringify(rec));
-      try {
-        const y = ymd(newISO, offsetMin(env));
-        if (y) await jira.setDueDate(env, idOrKey, y);
-      } catch {
-        /* set duedate là phụ; KV mới quyết định giờ nhắc */
-      }
-      await tg.answerCallback(env, cq.id, `⏰ Hoãn tới ${formatVN(newISO, offsetMin(env))}`);
-      return;
-    }
-
-    await tg.answerCallback(env, cq.id, "");
-  } catch (e: any) {
-    await tg.answerCallback(env, cq.id, "Lỗi: " + String(e.message || "").slice(0, 150));
-  }
-}
-
-// ---- Cron ----
-
-// Đọc mọi record theo prefix (có phân trang KV).
-async function loadByPrefix(env: any, prefix: string): Promise<any[]> {
-  const out: any[] = [];
-  let cursor: string | undefined;
-  do {
-    const page: any = await env.BOT_KV.list({ prefix, cursor });
-    for (const k of page.keys) {
-      const v = await env.BOT_KV.get(k.name);
-      if (!v) continue;
-      const rec = safeParse(v);
-      if (rec) out.push({ ...rec, _key: k.name });
-    }
-    cursor = page.list_complete ? undefined : page.cursor;
-  } while (cursor);
-  return out;
-}
-
-export async function runReminders(env: any): Promise<void> {
-  const owner = await env.BOT_KV.get("config:owner_chat");
-  const now = Date.now();
-  const lead = (parseInt(env.REMINDER_LEAD_MINUTES || "0", 10) || 0) * 60000;
-
-  const recs = await loadByPrefix(env, "due:");
-  for (const rec of recs) {
-    if (rec.fired) continue;
-    const dueMs = Date.parse(rec.dueISO);
-    if (Number.isNaN(dueMs)) continue;
-    if (now < dueMs - lead) continue; // chưa tới giờ
-
-    const target = rec.chatId || owner;
-    if (!target) continue;
-
-    try {
-      const resp: any = await tg.sendMessage(
-        env,
-        target,
-        `⏰ <b>Nhắc việc</b>\n📌 ${esc(rec.summary)}\n🔖 ${esc(rec.issueKey)} • hạn ${esc(formatVN(rec.dueISO, offsetMin(env)))}\n🔗 ${esc(rec.url)}`,
-        { reply_markup: taskButtons(rec.issueKey) },
-      );
-      if (!resp || resp.ok === false) {
-        console.error("reminder send failed", rec.issueKey, resp);
-        continue; // để fired=false cho cron sau thử lại
-      }
-      rec.fired = true;
-      const out = { ...rec };
-      delete out._key;
-      await env.BOT_KV.put(rec._key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 14 });
-    } catch (e) {
-      console.error("reminder error", rec.issueKey, e);
-      continue; // cô lập lỗi từng record
-    }
-  }
-}
-
-export async function runRecurring(env: any): Promise<void> {
-  const owner = await env.BOT_KV.get("config:owner_chat");
-  const now = Date.now();
-
-  const recs = await loadByPrefix(env, "recur:");
-  for (const rec of recs) {
-    if (!rec.nextISO) continue;
-    const ms = Date.parse(rec.nextISO);
-    if (Number.isNaN(ms)) continue;
-    if (now < ms) continue;
-
-    const target = rec.chatId || owner;
-    if (!target) continue;
-
-    try {
-      const resp: any = await tg.sendMessage(
-        env,
-        target,
-        `🔁 <b>Nhắc lặp</b>\n📌 ${esc(rec.text)}`,
-        { reply_markup: recurButtons(rec.id) },
-      );
-      if (!resp || resp.ok === false) {
-        console.error("recur send failed", rec.id, resp);
-        continue;
-      }
-      // Dời sang lần kế tiếp ở tương lai (không "đuổi" bù các lần đã lỡ).
-      rec.nextISO = rec.kind === "daily" ? nextDailyISO(rec.time, env) : nextWeeklyISO(rec.dow, rec.time, env);
-      const out = { ...rec };
-      delete out._key;
-      await env.BOT_KV.put(rec._key, JSON.stringify(out));
-    } catch (e) {
-      console.error("recur error", rec.id, e);
-      continue;
-    }
-  }
 }

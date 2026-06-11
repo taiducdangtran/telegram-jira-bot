@@ -11,6 +11,6 @@ SECRET="${3:?Thiếu WEBHOOK_SECRET}"
 curl -sS "https://api.telegram.org/bot${TOKEN}/setWebhook" \
   --data-urlencode "url=${URL%/}/webhook" \
   --data-urlencode "secret_token=${SECRET}" \
-  --data-urlencode 'allowed_updates=["message","edited_message","callback_query"]' \
+  --data-urlencode 'allowed_updates=["message","callback_query"]' \
   -d "drop_pending_updates=true"
 echo
