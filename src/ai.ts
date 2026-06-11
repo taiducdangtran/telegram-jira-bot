@@ -11,6 +11,7 @@ export interface ParsedTask {
   title: string;
   dueISO: string | null;
   priority: string | null;
+  assignee: string | null; // tên người được giao (nếu câu có "giao/nhắn cho X")
   aiFallback: boolean; // true = AI lỗi/không trả JSON -> title là nguyên văn tin nhắn
 }
 
@@ -39,11 +40,12 @@ export async function parseTask(text: string, env: Env): Promise<ParsedTask> {
     "Bạn là trợ lý quản lý công việc, đọc tin nhắn tiếng Việt.",
     `Bây giờ (giờ Việt Nam, UTC${off}) là: ${vnNowDescription(env)}.`,
     "Trả về DUY NHẤT một JSON object, KHÔNG markdown, KHÔNG giải thích, đúng dạng:",
-    `{"action": "create"|"query"|"chat", "title": string, "due": string hoặc null, "priority": string hoặc null}`,
+    `{"action": "create"|"query"|"chat", "title": string, "due": string hoặc null, "priority": string hoặc null, "assignee": string hoặc null}`,
     '- action: "create" nếu muốn TẠO/ghi một việc mới; "query" nếu HỎI hoặc muốn XEM danh sách việc đang có (vd "có task nào", "việc nào chưa làm", "đang tồn đọng gì", "liệt kê task"); "chat" nếu chỉ chào hỏi / không liên quan công việc. Phân vân mà câu là CÂU HỎI thì chọn "query".',
-    "- title: nội dung việc, ngắn gọn, BỎ phần mô tả thời gian (chỉ cần khi action=create).",
+    "- title: nội dung việc, ngắn gọn, BỎ phần mô tả thời gian VÀ BỎ phần giao cho ai (chỉ cần khi action=create).",
     `- due: nếu có nhắc thời gian (mai, thứ 6, 3h chiều, 15:00...), tính ra mốc cụ thể theo giờ VN và ghi ISO 8601 kèm ${off}. Không có thì null.`,
     '- priority: "Highest"/"High"/"Medium"/"Low"/"Lowest" theo mức khẩn ("khẩn cấp"->Highest, "gấp"/"khẩn"->High, "không gấp"->Low). Không rõ -> null.',
+    '- assignee: nếu câu có ý GIAO/nhắn việc cho ai đó (vd "giao cho Trang", "nhắn cho Cẩm Cần luôn", "cho Lam làm", "báo Uyên") thì ghi TÊN người đó (chỉ tên, bỏ "cho/anh/chị"). Không có thì null.',
     'Quy ước khi không nói rõ giờ: "sáng"=09:00, "trưa"=12:00, "chiều"=15:00, "tối"=20:00.',
   ].join("\n");
 
@@ -64,16 +66,17 @@ export async function parseTask(text: string, env: Env): Promise<ParsedTask> {
     if (!obj) {
       // Model trả chữ thừa/JSON hỏng — log để soi bằng wrangler tail, đừng nuốt im lặng.
       console.error("AI parse: không bóc được JSON", String(raw).slice(0, 200));
-      return { action: "create", title: text, dueISO: null, priority: null, aiFallback: true };
+      return { action: "create", title: text, dueISO: null, priority: null, assignee: null, aiFallback: true };
     }
     const action: Intent = obj.action === "query" || obj.action === "chat" ? obj.action : "create";
     const title = (obj.title && String(obj.title).trim()) || text;
     const dueISO = obj.due ? normalizeDueISO(String(obj.due), offsetMin(env)) : null;
     const priority = obj.priority && PRIORITIES.includes(String(obj.priority)) ? String(obj.priority) : null;
-    return { action, title, dueISO, priority, aiFallback: false };
+    const assignee = obj.assignee ? String(obj.assignee).trim() || null : null;
+    return { action, title, dueISO, priority, assignee, aiFallback: false };
   } catch (e) {
     console.error("AI parse failed", e);
-    return { action: "create", title: text, dueISO: null, priority: null, aiFallback: true };
+    return { action: "create", title: text, dueISO: null, priority: null, assignee: null, aiFallback: true };
   }
 }
 

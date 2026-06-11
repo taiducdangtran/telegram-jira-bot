@@ -17,17 +17,17 @@ export async function createTask(
   dueISO: string | null,
   warn: string,
   opts: { priority?: string | null; labels?: string[] } = {},
-): Promise<void> {
+): Promise<string | null> {
   const projectKey = await getProjectKey(env);
   if (!projectKey) {
     await tg.sendMessage(env, chatId, "⚠️ Chưa chọn project Jira. Gõ /projects rồi /useproject KEY.");
-    return;
+    return null;
   }
   // Jira summary tối đa 255 ký tự; gọn khoảng trắng + cắt để không bị Jira 400.
   title = String(title).replace(/\s+/g, " ").trim().slice(0, 250);
   if (!title) {
     await tg.sendMessage(env, chatId, "Thiếu nội dung việc.");
-    return;
+    return null;
   }
   const priority = opts.priority || null;
   const labels = (opts.labels || []).slice(0, 10);
@@ -70,6 +70,7 @@ export async function createTask(
     if (dropped.length) warn = (warn || "") + `\n⚠️ Project không hỗ trợ ${dropped.join(" & ")}, đã bỏ qua.`;
     head += `\n🔗 ${esc(url)}${warn || ""}`;
     await tg.sendMessage(env, chatId, head, extra);
+    return issue.key;
   } catch (e: any) {
     let hint = "";
     if (/issue\s*type|issuetype/i.test(e.message || "")) {
@@ -80,6 +81,7 @@ export async function createTask(
       }
     }
     await tg.sendMessage(env, chatId, `❌ Lỗi tạo issue Jira:\n<code>${esc(e.message).slice(0, 500)}</code>${hint}`);
+    return null;
   }
 }
 

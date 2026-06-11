@@ -15,7 +15,7 @@ import {
   transitionDone, deleteTask,
 } from "./tasks";
 import { onCallback } from "./callbacks";
-import { teamCommand } from "./team";
+import { teamCommand, findMember } from "./team";
 import type { Env, RecurRecord } from "./types";
 
 const HELP = `🤖 <b>Bot quản lý việc → Jira</b>
@@ -294,7 +294,13 @@ async function onNaturalText(text: string, chatId: number, env: Env, msg: any): 
   const warn = parsed.aiFallback
     ? "\n⚠️ AI không phân tích được câu này — đã lưu nguyên văn làm tiêu đề. Cần hạn giờ thì dùng /note <việc> // <giờ>."
     : "";
-  await createTask(env, chatId, parsed.title, dueISO, warn, { priority, labels });
+  const key = await createTask(env, chatId, parsed.title, dueISO, warn, { priority, labels });
+
+  // Câu có ý "giao cho X" -> giao + DM luôn (chỉ khi X đúng là người trong /team).
+  if (key && parsed.assignee) {
+    const member = await findMember(env, { name: parsed.assignee });
+    if (member) await applyAssign(env, chatId, key, member.alias);
+  }
 }
 
 // Reply vào tin có mã việc = THAO TÁC trên task đó (không tạo task mới).
