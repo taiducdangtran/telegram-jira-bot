@@ -3,7 +3,7 @@
 import { tg, escapeHtml as esc, taskButtons } from "./telegram";
 import { jira } from "./jira";
 import { offsetMin, formatVN, ymd } from "./time";
-import { matchPriority, cleanAssignee } from "./util";
+import { matchPriority, cleanAssignee, sanitizeLabel } from "./util";
 import { getProjectKey, loadByPrefix, markBotAction, clearBotAction, bumpSchedule } from "./store";
 import { findMember, notifyAssignment } from "./team";
 import type { Env, DueRecord, TeamMember } from "./types";
@@ -185,6 +185,8 @@ export async function applyAssign(env: Env, chatId: number, key: string, whoRaw:
   if (member && !member.jiraAccountId) {
     try {
       await jira.addComment(env, key, `📌 Giao cho ${member.alias} (qua Telegram bot).`).catch(() => {});
+      // Gắn nhãn người được giao -> Board hiện "ai làm" dù không set cột Assignee.
+      await jira.addLabels(env, key, [sanitizeLabel(member.alias)]).catch(() => {});
       await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(member.alias)} — đã DM + ghi chú lên Jira (cột Assignee giữ nguyên).`);
       await dmAssignee(env, chatId, member, key, note);
     } catch (e: any) {
@@ -214,6 +216,8 @@ export async function applyAssign(env: Env, chatId: number, key: string, whoRaw:
     }
     await markBotAction(env, key, "assign"); // webhook Jira dội về sẽ biết là echo (tránh DM đôi)
     await jira.assign(env, key, accountId);
+    // Gắn thêm nhãn người được giao -> Board lọc theo người được, đồng nhất với chế độ gọn.
+    await jira.addLabels(env, key, [sanitizeLabel(name)]).catch(() => {});
     await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(name)}.`);
     try {
       const target = member || (await findMember(env, { accountId, name }));

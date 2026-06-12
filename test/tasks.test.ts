@@ -11,6 +11,7 @@ vi.mock("../src/jira", () => ({
     myself: vi.fn(async () => ({ accountId: "boss", displayName: "Sếp" })),
     assign: vi.fn(async () => ({})),
     addComment: vi.fn(async () => ({})),
+    addLabels: vi.fn(async () => ({})),
     searchAssignable: vi.fn(async () => []),
     getIssueFields: vi.fn(async () => ({ fields: { summary: "việc X", duedate: null } })),
     issueUrl: (_e: any, k: string) => "https://x/browse/" + k,
@@ -44,6 +45,7 @@ describe("applyAssign", () => {
     await applyAssign(ENV, ADMIN, "KAN-1", "cho Trang"); // "cho" được bỏ
     expect(jira.addComment).toHaveBeenCalledWith(ENV, "KAN-1", expect.stringContaining("Trang"));
     expect(jira.assign).not.toHaveBeenCalled(); // không set Assignee
+    expect(jira.addLabels).toHaveBeenCalledWith(ENV, "KAN-1", ["Trang"]); // gắn nhãn người được giao
     expect(notifyAssignment).toHaveBeenCalledTimes(1); // có DM Trang
   });
 
@@ -54,6 +56,7 @@ describe("applyAssign", () => {
     await applyAssign(ENV, ADMIN, "KAN-2", "Trang");
     expect(jira.assign).toHaveBeenCalledWith(ENV, "KAN-2", "acc-trang");
     expect(jira.addComment).not.toHaveBeenCalled();
+    expect(jira.addLabels).toHaveBeenCalledWith(ENV, "KAN-2", ["Trang-N"]); // nhãn theo tên hiển thị Jira
     expect(notifyAssignment).toHaveBeenCalledTimes(1);
   });
 

@@ -97,3 +97,27 @@ export function cleanAssignee(raw: string): string {
 export function validateProjectKey(key: string): boolean {
   return /^[A-Z][A-Z0-9]{1,9}$/.test(key);
 }
+
+// Đoán LOẠI VIỆC từ nội dung -> nhãn để lọc Board (video/design/social). Tất định,
+// không cần AI. Thứ tự: video -> design -> social, khớp đầu tiên thắng. Không rõ -> null
+// (thà KHÔNG gắn còn hơn gắn sai nhãn).
+export function detectCategory(text: string): string | null {
+  const t = String(text).toLowerCase();
+  if (/\b(video|quay|clip|tvc|reel|short|montage|edit)\b|dựng phim|quay phim/.test(t)) return "video";
+  if (/\b(design|thumbnail|infographic|banner|poster|cover|mockup)\b|thiết kế|ảnh bìa|bộ ảnh|key visual/.test(t)) return "design";
+  if (/\b(social|post|fanpage|page|caption|content)\b|viết bài|đăng bài|nội dung/.test(t)) return "social";
+  return null;
+}
+
+// Chuẩn hoá tên người -> nhãn Jira an toàn: bỏ dấu, đ->d, dấu cách/ký tự lạ -> "-".
+// ASCII hoá để lọc nhãn không vỡ trên URL. "Tú Uyên" -> "Tu-Uyen", "Cẩm Cần" -> "Cam-Can".
+export function sanitizeLabel(s: string): string {
+  return String(s)
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+}

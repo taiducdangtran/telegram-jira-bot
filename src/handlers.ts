@@ -8,7 +8,7 @@ import {
   offsetMin, nowVN, parseDueStrict, formatVN,
   hhmmVN, nextDailyISO, nextWeeklyISO, parseDow, dowNameVN, parseRelative,
 } from "./time";
-import { p2, extractLabels, detectPriority, extractIssueKey, looksLikeQuery, looksLikeGreeting, parseClock, validateProjectKey, splitBatchCommands } from "./util";
+import { p2, extractLabels, detectPriority, detectCategory, extractIssueKey, looksLikeQuery, looksLikeGreeting, parseClock, validateProjectKey, splitBatchCommands } from "./util";
 import { isAllowed, loadByPrefix, rememberOwnerChat, bumpSchedule } from "./store";
 import {
   createTask, listUpcoming, listPending, applyAssign, applyDue, applyPriority,
@@ -242,7 +242,8 @@ async function noteCommand(arg: string, chatId: number, env: Env): Promise<void>
     await tg.sendMessage(env, chatId, "Thiếu nội dung việc.");
     return;
   }
-  await createTask(env, chatId, text, dueISO, warn, { priority, labels });
+  const cat = detectCategory(body); // nhãn loại việc (video/design/social) để lọc Board
+  await createTask(env, chatId, text, dueISO, warn, { priority, labels: cat ? [...labels, cat] : labels });
 }
 
 async function onNaturalText(text: string, chatId: number, env: Env, msg: any): Promise<void> {
@@ -290,11 +291,12 @@ async function onNaturalText(text: string, chatId: number, env: Env, msg: any): 
 
   const dueISO = rel?.dueISO || parsed.dueISO;
   const priority = parsed.priority || detectPriority(text);
+  const cat = detectCategory(text); // nhãn loại việc (video/design/social) để lọc Board
   // AI lỗi/không trả JSON -> đã lưu nguyên văn; báo để user biết mà tự đặt hạn.
   const warn = parsed.aiFallback
     ? "\n⚠️ AI không phân tích được câu này — đã lưu nguyên văn làm tiêu đề. Cần hạn giờ thì dùng /note &lt;việc&gt; // &lt;giờ&gt;."
     : "";
-  const key = await createTask(env, chatId, parsed.title, dueISO, warn, { priority, labels });
+  const key = await createTask(env, chatId, parsed.title, dueISO, warn, { priority, labels: cat ? [...labels, cat] : labels });
 
   // Câu có ý "giao cho X" -> giao + DM luôn (chỉ khi X đúng là người trong /team).
   // Kèm "nhắn X ..." -> DM người đó luôn lời nhắn riêng.

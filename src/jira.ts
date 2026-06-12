@@ -152,6 +152,16 @@ export const jira = {
     return jreq(env, "POST", `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`, { body: adf(text) });
   },
 
+  // Gắn THÊM nhãn (update.add) -> không ghi đè nhãn sẵn có. Dùng khi giao việc để
+  // gắn nhãn người được giao mà vẫn giữ nhãn loại việc đã đặt lúc tạo.
+  async addLabels(env: Env, issueKey: string, labels: string[]): Promise<any> {
+    const add = labels.filter(Boolean).map((name) => ({ add: name }));
+    if (!add.length) return null;
+    return jreq(env, "PUT", `/rest/api/3/issue/${encodeURIComponent(issueKey)}`, {
+      update: { labels: add },
+    });
+  },
+
   issueUrl(env: Env, issueKey: string): string {
     return `${base(env)}/browse/${encodeURIComponent(issueKey)}`;
   },

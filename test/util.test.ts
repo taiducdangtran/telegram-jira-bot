@@ -3,7 +3,36 @@ import { describe, it, expect } from "vitest";
 import {
   extractLabels, detectPriority, extractIssueKey, looksLikeQuery, looksLikeGreeting,
   parseClock, matchPriority, validateProjectKey, safeParse, p2, cleanAssignee, splitBatchCommands,
+  detectCategory, sanitizeLabel,
 } from "../src/util";
+
+describe("detectCategory", () => {
+  it("video", () => {
+    expect(detectCategory("Quay video sản phẩm Fuji Smart")).toBe("video");
+    expect(detectCategory("Làm video doanh nghiệp cho Fuji")).toBe("video");
+  });
+  it("design", () => {
+    expect(detectCategory("Lên task design thumbnails kênh youtube")).toBe("design");
+    expect(detectCategory("design infographics sản phẩm combo")).toBe("design");
+  });
+  it("social", () => {
+    expect(detectCategory("Lên plan viết bài social tháng 6 cho page lò nướng")).toBe("social");
+  });
+  it("không rõ -> null", () => {
+    expect(detectCategory("gọi điện cho khách hàng")).toBeNull();
+  });
+});
+
+describe("sanitizeLabel", () => {
+  it("bỏ dấu + dấu cách -> nhãn ASCII an toàn", () => {
+    expect(sanitizeLabel("Tú Uyên")).toBe("Tu-Uyen");
+    expect(sanitizeLabel("Cẩm Cần")).toBe("Cam-Can");
+    expect(sanitizeLabel("Đức")).toBe("Duc");
+  });
+  it("gọn dấu - thừa ở đầu/cuối", () => {
+    expect(sanitizeLabel("  Trang  ")).toBe("Trang");
+  });
+});
 
 describe("extractLabels", () => {
   it("gỡ #tag khỏi text, gom thành labels", () => {
