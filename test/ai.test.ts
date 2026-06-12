@@ -17,22 +17,40 @@ afterEach(() => vi.useRealTimers());
 describe("parseTask", () => {
   it("AI trả JSON chuẩn -> parse đủ trường, aiFallback=false", async () => {
     const env = baseEnv(async () => ({
-      response: '{"action":"create","title":"gọi khách A","due":"2026-06-12T15:00:00+07:00","priority":"High","assignee":null}',
+      response: '{"action":"create","title":"gọi khách A","due":"2026-06-12T15:00:00+07:00","priority":"High","assignee":null,"note":null}',
     }));
     const r = await parseTask("mai gọi khách A gấp", env);
     expect(r).toEqual({
       action: "create", title: "gọi khách A",
-      dueISO: "2026-06-12T15:00:00+07:00", priority: "High", assignee: null, aiFallback: false,
+      dueISO: "2026-06-12T15:00:00+07:00", priority: "High", assignee: null, note: null, aiFallback: false,
     });
   });
 
   it("trích được assignee khi câu có 'giao cho X'", async () => {
     const env = baseEnv(async () => ({
-      response: '{"action":"create","title":"quay video sản phẩm","due":null,"priority":null,"assignee":"Trang"}',
+      response: '{"action":"create","title":"quay video sản phẩm","due":null,"priority":null,"assignee":"Trang","note":null}',
     }));
     const r = await parseTask("quay video sản phẩm giao cho Trang", env);
     expect(r.assignee).toBe("Trang");
     expect(r.title).toBe("quay video sản phẩm");
+  });
+
+  it("trích được note (lời nhắn cho người được giao)", async () => {
+    const env = baseEnv(async () => ({
+      response: '{"action":"create","title":"lên plan viết bài social tháng 6 cho page lò nướng","due":null,"priority":null,"assignee":"Tú Uyên","note":"Nhớ lên task trên hệ thống ERP nha"}',
+    }));
+    const r = await parseTask("Lên task lên plan viết bài social tháng 6 cho page lò nướng giao cho Tú Uyên, nhắn Tú Uyên nhớ lên task trên hệ thống ERP", env);
+    expect(r.assignee).toBe("Tú Uyên");
+    expect(r.note).toBe("Nhớ lên task trên hệ thống ERP nha");
+  });
+
+  it("response là object (Workers AI đời mới) -> không vỡ vì s.indexOf", async () => {
+    const env = baseEnv(async () => ({
+      response: { action: "create", title: "kiểm kho", due: null, priority: null, assignee: null, note: null },
+    }));
+    const r = await parseTask("kiểm kho", env);
+    expect(r.aiFallback).toBe(false);
+    expect(r.title).toBe("kiểm kho");
   });
 
   it("AI treo quá 12s -> cắt, fallback nguyên văn, KHÔNG chờ mãi", async () => {

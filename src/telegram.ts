@@ -13,8 +13,37 @@ async function call(env: Env, method: string, payload: Record<string, unknown>):
     body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({ ok: false }));
-  if (!(data as any).ok) console.error("telegram", method, JSON.stringify(data));
+  if (!(data as any).ok) {
+    console.error("telegram", method, JSON.stringify(data));
+    // LƯỚI AN TOÀN: Telegram từ chối vì HTML/entities hỏng (mã 400 "can't parse
+    // entities") -> đừng để tin câm lặng. Gửi lại bản KHÔNG parse_mode, đã bỏ thẻ &
+    // giải mã entity để đọc sạch. Một chuỗi lỗi không bao giờ làm bot im nữa.
+    const desc = String((data as any)?.description || "");
+    if (
+      "text" in payload && payload.parse_mode &&
+      Number((data as any)?.error_code) === 400 && /parse|entit|tag/i.test(desc)
+    ) {
+      const { parse_mode, ...rest } = payload;
+      const plain = stripHtml(String(payload.text ?? ""));
+      const res2 = await fetch(api(env, method), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...rest, text: plain }),
+      });
+      const data2 = await res2.json().catch(() => ({ ok: false }));
+      if (!(data2 as any).ok) console.error("telegram retry-plain", method, JSON.stringify(data2));
+      return data2;
+    }
+  }
   return data;
+}
+
+// Bỏ thẻ HTML + giải mã entity để hiển thị dạng văn bản thuần (dùng cho lưới an toàn).
+function stripHtml(s: string): string {
+  return s
+    .replace(/<[^>]*>/g, "")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 }
 
 export function escapeHtml(s: unknown): string {

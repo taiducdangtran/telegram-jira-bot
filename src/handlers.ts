@@ -292,14 +292,15 @@ async function onNaturalText(text: string, chatId: number, env: Env, msg: any): 
   const priority = parsed.priority || detectPriority(text);
   // AI lỗi/không trả JSON -> đã lưu nguyên văn; báo để user biết mà tự đặt hạn.
   const warn = parsed.aiFallback
-    ? "\n⚠️ AI không phân tích được câu này — đã lưu nguyên văn làm tiêu đề. Cần hạn giờ thì dùng /note <việc> // <giờ>."
+    ? "\n⚠️ AI không phân tích được câu này — đã lưu nguyên văn làm tiêu đề. Cần hạn giờ thì dùng /note &lt;việc&gt; // &lt;giờ&gt;."
     : "";
   const key = await createTask(env, chatId, parsed.title, dueISO, warn, { priority, labels });
 
   // Câu có ý "giao cho X" -> giao + DM luôn (chỉ khi X đúng là người trong /team).
+  // Kèm "nhắn X ..." -> DM người đó luôn lời nhắn riêng.
   if (key && parsed.assignee) {
     const member = await findMember(env, { name: parsed.assignee });
-    if (member) await applyAssign(env, chatId, key, member.alias);
+    if (member) await applyAssign(env, chatId, key, member.alias, parsed.note);
   }
 }
 

@@ -151,17 +151,23 @@ export async function findMember(
 
 // DM người được giao việc. KHÔNG kèm nút: callback của người ngoài allowlist bị chặn,
 // nút chết chỉ gây bực — v1 thông báo thuần. Trả response để caller báo admin khi fail.
+//
+// Nhân viên KHÔNG cần thấy mã Jira (KAN-x) hay link — chỉ cần nội dung việc + lời nhắn
+// riêng của sếp (vd "Nhớ lên task trên ERP nha"). Bỏ key/URL cho gọn; `key` vẫn nhận
+// để caller dùng tra summary, không hiển thị.
 export async function notifyAssignment(
   env: Env,
   member: TeamMember,
-  key: string,
+  _key: string,
   summary: string,
   dueText: string | null,
+  note: string | null = null,
 ): Promise<any> {
   const due = dueText ? `\n⏰ Hạn: ${esc(dueText)}` : "";
+  const msg = note ? `\n💬 ${esc(note)}` : "";
   return tg.sendMessage(
     env,
     member.chatId,
-    `📋 <b>Bạn được giao việc</b>\n📌 ${esc(summary)}\n🔖 ${esc(key)}${due}\n🔗 ${esc(jira.issueUrl(env, key))}`,
+    `📋 <b>Bạn được giao việc</b>\n📌 ${esc(summary)}${due}${msg}`,
   );
 }

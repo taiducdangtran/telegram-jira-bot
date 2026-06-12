@@ -134,7 +134,8 @@ export async function listPending(chatId: number, env: Env): Promise<void> {
 }
 
 // DM người được giao (lấy summary + hạn từ Jira). Báo admin nếu DM hỏng.
-async function dmAssignee(env: Env, adminChatId: number, member: TeamMember, key: string): Promise<void> {
+// `note` = lời nhắn riêng của sếp cho người này (nếu có).
+async function dmAssignee(env: Env, adminChatId: number, member: TeamMember, key: string, note: string | null = null): Promise<void> {
   if (member.chatId === adminChatId) return; // đừng DM chính người đang thao tác
   let summary = key;
   let dueText: string | null = null;
@@ -145,7 +146,7 @@ async function dmAssignee(env: Env, adminChatId: number, member: TeamMember, key
   } catch {
     /* thiếu summary thì DM bằng key */
   }
-  const resp: any = await notifyAssignment(env, member, key, summary, dueText);
+  const resp: any = await notifyAssignment(env, member, key, summary, dueText, note);
   if (!resp || resp.ok === false) {
     await tg.sendMessage(env, adminChatId, `⚠️ Đã giao nhưng không DM được ${esc(member.alias)} (chưa bấm Start bot? Chat ID sai?).`);
   }
@@ -157,7 +158,7 @@ async function dmAssignee(env: Env, adminChatId: number, member: TeamMember, key
 //  - trong /team, CHƯA link Jira (chế độ gọn, khỏi tạo user Jira) -> ghi chú lên Jira + DM,
 //    KHÔNG đụng cột Assignee.
 //  - không trong /team -> thử tìm user Jira thật của project.
-export async function applyAssign(env: Env, chatId: number, key: string, whoRaw: string): Promise<void> {
+export async function applyAssign(env: Env, chatId: number, key: string, whoRaw: string, note: string | null = null): Promise<void> {
   const who = cleanAssignee(whoRaw); // "cho Trang" -> "Trang"
   if (!who) {
     await tg.sendMessage(env, chatId, "Cú pháp: /assign KAN-12 me  (hoặc /assign KAN-12 &lt;tên&gt;)");
@@ -185,7 +186,7 @@ export async function applyAssign(env: Env, chatId: number, key: string, whoRaw:
     try {
       await jira.addComment(env, key, `📌 Giao cho ${member.alias} (qua Telegram bot).`).catch(() => {});
       await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(member.alias)} — đã DM + ghi chú lên Jira (cột Assignee giữ nguyên).`);
-      await dmAssignee(env, chatId, member, key);
+      await dmAssignee(env, chatId, member, key, note);
     } catch (e: any) {
       await tg.sendMessage(env, chatId, `❌ Lỗi giao việc:\n<code>${esc(e.message).slice(0, 300)}</code>`);
     }
@@ -216,7 +217,7 @@ export async function applyAssign(env: Env, chatId: number, key: string, whoRaw:
     await tg.sendMessage(env, chatId, `✅ Đã giao <b>${esc(key)}</b> cho ${esc(name)}.`);
     try {
       const target = member || (await findMember(env, { accountId, name }));
-      if (target) await dmAssignee(env, chatId, target, key);
+      if (target) await dmAssignee(env, chatId, target, key, note);
     } catch (e) {
       console.error("notify assignee failed", key, e);
     }
